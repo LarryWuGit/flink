@@ -57,11 +57,10 @@ import java.util.Map;
  * {@link RichFunction#open(org.apache.flink.configuration.Configuration)} and
  * {@link RichFunction#close()}.
  *
- * <p>
- * State related apis in {@link RuntimeContext} are not supported yet because the key may get
+ * <p>State related apis in {@link RuntimeContext} are not supported yet because the key may get
  * changed while accessing states in the working thread.
- * <p>
- * {@link IterationRuntimeContext#getIterationAggregator(String)} is not supported since the
+ *
+ * <p>{@link IterationRuntimeContext#getIterationAggregator(String)} is not supported since the
  * aggregator may be modified by multiple threads.
  *
  * @param <IN> The type of the input elements.
@@ -182,7 +181,6 @@ public abstract class RichAsyncFunction<IN, OUT> extends AbstractRichFunction im
 		public <UK, UV> MapState<UK, UV> getMapState(MapStateDescriptor<UK, UV> stateProperties) {
 			throw new UnsupportedOperationException("State is not supported in rich async functions.");
 		}
-
 
 		@Override
 		public <V, A extends Serializable> void addAccumulator(String name, Accumulator<V, A> accumulator) {

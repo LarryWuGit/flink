@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -15,6 +15,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 package org.apache.flink.streaming.api.functions.windowing;
 
 import org.apache.flink.annotation.Internal;
@@ -36,9 +37,17 @@ import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.util.Collections;
 
+/**
+ * Internal {@link ProcessWindowFunction} that is used for implementing a fold on a window
+ * configuration that only allows {@link ProcessWindowFunction} and cannot directly execute a
+ * {@link FoldFunction}.
+ *
+ * @deprecated will be removed in a future version
+ */
 @Internal
+@Deprecated
 public class FoldApplyProcessWindowFunction<K, W extends Window, T, ACC, R>
-	extends RichProcessWindowFunction<T, R, K, W>
+	extends ProcessWindowFunction<T, R, K, W>
 	implements OutputTypeConfigurable<R> {
 
 	private static final long serialVersionUID = 1L;
@@ -96,16 +105,14 @@ public class FoldApplyProcessWindowFunction<K, W extends Window, T, ACC, R>
 		}
 
 		this.ctx.window = context.window();
-		this.ctx.windowState = context.windowState();
-		this.ctx.globalState = context.globalState();
+		this.ctx.context = context;
 		windowFunction.process(key, ctx, Collections.singletonList(result), out);
 	}
 
 	@Override
 	public void clear(final Context context) throws Exception{
 		this.ctx.window = context.window();
-		this.ctx.windowState = context.windowState();
-		this.ctx.globalState = context.globalState();
+		this.ctx.context = context;
 		windowFunction.clear(ctx);
 	}
 

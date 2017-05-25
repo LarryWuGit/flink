@@ -23,8 +23,10 @@ import org.apache.flink.api.common.JobID;
 import org.apache.flink.api.common.functions.RichFlatMapFunction;
 import org.apache.flink.api.common.restartstrategy.RestartStrategies;
 import org.apache.flink.api.common.state.ListState;
+import org.apache.flink.api.common.state.ListStateDescriptor;
 import org.apache.flink.api.common.state.ValueState;
 import org.apache.flink.api.common.state.ValueStateDescriptor;
+import org.apache.flink.api.common.typeutils.base.IntSerializer;
 import org.apache.flink.api.java.functions.KeySelector;
 import org.apache.flink.api.java.tuple.Tuple2;
 import org.apache.flink.configuration.ConfigConstants;
@@ -36,7 +38,6 @@ import org.apache.flink.runtime.instance.ActorGateway;
 import org.apache.flink.runtime.jobgraph.JobGraph;
 import org.apache.flink.runtime.jobgraph.SavepointRestoreSettings;
 import org.apache.flink.runtime.messages.JobManagerMessages;
-import org.apache.flink.runtime.state.DefaultOperatorStateBackend;
 import org.apache.flink.runtime.state.FunctionInitializationContext;
 import org.apache.flink.runtime.state.FunctionSnapshotContext;
 import org.apache.flink.runtime.state.KeyGroupRangeAssignment;
@@ -55,10 +56,12 @@ import org.apache.flink.streaming.api.functions.source.SourceFunction;
 import org.apache.flink.util.Collector;
 import org.apache.flink.util.TestLogger;
 import org.junit.AfterClass;
-import org.junit.BeforeClass;
+import org.junit.Before;
 import org.junit.ClassRule;
 import org.junit.Test;
 import org.junit.rules.TemporaryFolder;
+import org.junit.runner.RunWith;
+import org.junit.runners.Parameterized;
 import scala.Option;
 import scala.concurrent.Await;
 import scala.concurrent.Future;
@@ -79,14 +82,22 @@ import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
 
-/**
- * TODO : parameterize to test all different state backends!
- */
+@RunWith(Parameterized.class)
 public class RescalingITCase extends TestLogger {
 
 	private static final int numTaskManagers = 2;
 	private static final int slotsPerTaskManager = 2;
 	private static final int numSlots = numTaskManagers * slotsPerTaskManager;
+
+	@Parameterized.Parameters
+	public static Object[] data() {
+		return new Object[]{"filesystem", "rocksdb"};
+	}
+
+	@Parameterized.Parameter
+	public String backend;
+
+	private String currentBackend = null;
 
 	enum OperatorCheckpointMethod {
 		NON_PARTITIONED, CHECKPOINTED_FUNCTION, CHECKPOINTED_FUNCTION_BROADCAST, LIST_CHECKPOINTED
@@ -97,25 +108,32 @@ public class RescalingITCase extends TestLogger {
 	@ClassRule
 	public static TemporaryFolder temporaryFolder = new TemporaryFolder();
 
-	@BeforeClass
-	public static void setup() throws Exception {
-		Configuration config = new Configuration();
-		config.setInteger(ConfigConstants.LOCAL_NUMBER_TASK_MANAGER, numTaskManagers);
-		config.setInteger(ConfigConstants.TASK_MANAGER_NUM_TASK_SLOTS, slotsPerTaskManager);
+	@Before
+	public void setup() throws Exception {
+		// detect parameter change
+		if (currentBackend != backend) {
+			shutDownExistingCluster();
 
-		final File checkpointDir = temporaryFolder.newFolder();
-		final File savepointDir = temporaryFolder.newFolder();
+			currentBackend = backend;
 
-		config.setString(CoreOptions.STATE_BACKEND, "filesystem");
-		config.setString(FsStateBackendFactory.CHECKPOINT_DIRECTORY_URI_CONF_KEY, checkpointDir.toURI().toString());
-		config.setString(ConfigConstants.SAVEPOINT_DIRECTORY_KEY, savepointDir.toURI().toString());
+			Configuration config = new Configuration();
+			config.setInteger(ConfigConstants.LOCAL_NUMBER_TASK_MANAGER, numTaskManagers);
+			config.setInteger(ConfigConstants.TASK_MANAGER_NUM_TASK_SLOTS, slotsPerTaskManager);
 
-		cluster = new TestingCluster(config);
-		cluster.start();
+			final File checkpointDir = temporaryFolder.newFolder();
+			final File savepointDir = temporaryFolder.newFolder();
+
+			config.setString(CoreOptions.STATE_BACKEND, currentBackend);
+			config.setString(FsStateBackendFactory.CHECKPOINT_DIRECTORY_URI_CONF_KEY, checkpointDir.toURI().toString());
+			config.setString(ConfigConstants.SAVEPOINT_DIRECTORY_KEY, savepointDir.toURI().toString());
+
+			cluster = new TestingCluster(config);
+			cluster.start();
+		}
 	}
 
 	@AfterClass
-	public static void teardown() {
+	public static void shutDownExistingCluster() {
 		if (cluster != null) {
 			cluster.shutdown();
 			cluster.awaitTermination();
@@ -143,7 +161,7 @@ public class RescalingITCase extends TestLogger {
 	}
 
 	/**
-	 * Tests that a a job with purely keyed state can be restarted from a savepoint
+	 * Tests that a job with purely keyed state can be restarted from a savepoint
 	 * with a different parallelism.
 	 */
 	public void testSavepointRescalingKeyedState(boolean scaleOut, boolean deriveMaxParallelism) throws Exception {
@@ -865,6 +883,7 @@ public class RescalingITCase extends TestLogger {
 
 	private static class StateSourceBase extends RichParallelSourceFunction<Integer> {
 
+		private static final long serialVersionUID = 7512206069681177940L;
 		private static volatile CountDownLatch workStartedLatch = new CountDownLatch(1);
 
 		protected volatile int counter = 0;
@@ -957,7 +976,7 @@ public class RescalingITCase extends TestLogger {
 		private static final long serialVersionUID = -359715965103593462L;
 		private static final int NUM_PARTITIONS = 7;
 
-		private ListState<Integer> counterPartitions;
+		private transient ListState<Integer> counterPartitions;
 		private boolean broadcast;
 
 		private static int[] CHECK_CORRECT_SNAPSHOT;
@@ -991,13 +1010,13 @@ public class RescalingITCase extends TestLogger {
 		public void initializeState(FunctionInitializationContext context) throws Exception {
 
 			if (broadcast) {
-				//TODO this is temporarily casted to test already functionality that we do not yet expose through public API
-				DefaultOperatorStateBackend operatorStateStore = (DefaultOperatorStateBackend) context.getOperatorStateStore();
-				this.counterPartitions =
-						operatorStateStore.getBroadcastSerializableListState("counter_partitions");
+				this.counterPartitions = context
+						.getOperatorStateStore()
+						.getUnionListState(new ListStateDescriptor<>("counter_partitions", IntSerializer.INSTANCE));
 			} else {
-				this.counterPartitions =
-						context.getOperatorStateStore().getSerializableListState("counter_partitions");
+				this.counterPartitions = context
+						.getOperatorStateStore()
+						.getListState(new ListStateDescriptor<>("counter_partitions", IntSerializer.INSTANCE));
 			}
 
 			if (context.isRestored()) {

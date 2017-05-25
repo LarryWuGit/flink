@@ -17,22 +17,22 @@
 
 package org.apache.flink.streaming.runtime.io;
 
-import java.io.IOException;
-
 import org.apache.flink.annotation.Internal;
-import org.apache.flink.util.OutputTag;
 import org.apache.flink.api.common.typeutils.TypeSerializer;
 import org.apache.flink.runtime.event.AbstractEvent;
 import org.apache.flink.runtime.io.network.api.writer.RecordWriter;
 import org.apache.flink.runtime.plugable.SerializationDelegate;
 import org.apache.flink.streaming.api.operators.Output;
+import org.apache.flink.streaming.api.watermark.Watermark;
 import org.apache.flink.streaming.runtime.streamrecord.LatencyMarker;
 import org.apache.flink.streaming.runtime.streamrecord.StreamElement;
 import org.apache.flink.streaming.runtime.streamrecord.StreamElementSerializer;
-import org.apache.flink.streaming.api.watermark.Watermark;
 import org.apache.flink.streaming.runtime.streamrecord.StreamRecord;
 import org.apache.flink.streaming.runtime.streamstatus.StreamStatus;
 import org.apache.flink.streaming.runtime.streamstatus.StreamStatusProvider;
+import org.apache.flink.util.OutputTag;
+
+import java.io.IOException;
 
 import static org.apache.flink.util.Preconditions.checkNotNull;
 
@@ -43,7 +43,7 @@ import static org.apache.flink.util.Preconditions.checkNotNull;
 public class RecordWriterOutput<OUT> implements Output<StreamRecord<OUT>> {
 
 	private StreamRecordWriter<SerializationDelegate<StreamElement>> recordWriter;
-	
+
 	private SerializationDelegate<StreamElement> serializationDelegate;
 
 	private final StreamStatusProvider streamStatusProvider;
@@ -59,9 +59,9 @@ public class RecordWriterOutput<OUT> implements Output<StreamRecord<OUT>> {
 
 		checkNotNull(recordWriter);
 		this.outputTag = outputTag;
-		// generic hack: cast the writer to generic Object type so we can use it 
+		// generic hack: cast the writer to generic Object type so we can use it
 		// with multiplexed records and watermarks
-		this.recordWriter = (StreamRecordWriter<SerializationDelegate<StreamElement>>) 
+		this.recordWriter = (StreamRecordWriter<SerializationDelegate<StreamElement>>)
 				(StreamRecordWriter<?>) recordWriter;
 
 		TypeSerializer<StreamElement> outRecordSerializer =
@@ -145,12 +145,11 @@ public class RecordWriterOutput<OUT> implements Output<StreamRecord<OUT>> {
 	public void broadcastEvent(AbstractEvent event) throws IOException, InterruptedException {
 		recordWriter.broadcastEvent(event);
 	}
-	
-	
+
 	public void flush() throws IOException {
 		recordWriter.flush();
 	}
-	
+
 	@Override
 	public void close() {
 		recordWriter.close();

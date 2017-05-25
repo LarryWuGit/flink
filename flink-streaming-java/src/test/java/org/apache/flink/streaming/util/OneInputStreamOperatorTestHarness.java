@@ -15,6 +15,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 package org.apache.flink.streaming.util;
 
 import org.apache.flink.api.common.typeutils.TypeSerializer;
@@ -37,6 +38,8 @@ public class OneInputStreamOperatorTestHarness<IN, OUT>
 		extends AbstractStreamOperatorTestHarness<OUT> {
 
 	private final OneInputStreamOperator<IN, OUT> oneInputOperator;
+
+	private long currentWatermark;
 
 	public OneInputStreamOperatorTestHarness(
 			OneInputStreamOperator<IN, OUT> operator,
@@ -84,7 +87,6 @@ public class OneInputStreamOperatorTestHarness<IN, OUT>
 		processElement(new StreamRecord<>(value, timestamp));
 	}
 
-
 	public void processElement(StreamRecord<IN> element) throws Exception {
 		operator.setKeyContextElement1(element);
 		oneInputOperator.processElement(element);
@@ -98,10 +100,15 @@ public class OneInputStreamOperatorTestHarness<IN, OUT>
 	}
 
 	public void processWatermark(long watermark) throws Exception {
-		oneInputOperator.processWatermark(new Watermark(watermark));
+		processWatermark(new Watermark(watermark));
 	}
 
 	public void processWatermark(Watermark mark) throws Exception {
+		currentWatermark = mark.getTimestamp();
 		oneInputOperator.processWatermark(mark);
+	}
+
+	public long getCurrentWatermark() {
+		return currentWatermark;
 	}
 }

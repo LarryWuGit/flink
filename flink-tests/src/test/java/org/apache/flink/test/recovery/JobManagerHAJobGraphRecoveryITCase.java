@@ -32,6 +32,8 @@ import org.apache.flink.configuration.Configuration;
 import org.apache.flink.runtime.akka.AkkaUtils;
 import org.apache.flink.runtime.akka.ListeningBehaviour;
 import org.apache.flink.runtime.clusterframework.types.ResourceID;
+import org.apache.flink.runtime.highavailability.HighAvailabilityServices;
+import org.apache.flink.runtime.highavailability.HighAvailabilityServicesUtils;
 import org.apache.flink.runtime.instance.ActorGateway;
 import org.apache.flink.runtime.instance.AkkaActorGateway;
 import org.apache.flink.runtime.jobgraph.JobGraph;
@@ -45,18 +47,19 @@ import org.apache.flink.runtime.messages.JobManagerMessages.LeaderSessionMessage
 import org.apache.flink.runtime.messages.JobManagerMessages.SubmitJob;
 import org.apache.flink.runtime.taskmanager.TaskManager;
 import org.apache.flink.runtime.testingUtils.TestingCluster;
+import org.apache.flink.runtime.testingUtils.TestingUtils;
 import org.apache.flink.runtime.testtasks.BlockingNoOpInvokable;
-import org.apache.flink.runtime.testutils.CommonTestUtils;
 import org.apache.flink.runtime.testutils.JobManagerActorTestUtils;
 import org.apache.flink.runtime.testutils.JobManagerProcess;
 import org.apache.flink.runtime.testutils.ZooKeeperTestUtils;
-import org.apache.flink.runtime.util.ZooKeeperUtils;
 import org.apache.flink.runtime.zookeeper.ZooKeeperTestEnvironment;
 import org.apache.flink.util.TestLogger;
 import org.apache.zookeeper.data.Stat;
 import org.junit.AfterClass;
 import org.junit.Before;
+import org.junit.Rule;
 import org.junit.Test;
+import org.junit.rules.TemporaryFolder;
 import scala.Option;
 import scala.Some;
 import scala.Tuple2;
@@ -66,7 +69,6 @@ import scala.concurrent.duration.Deadline;
 import scala.concurrent.duration.FiniteDuration;
 
 import java.io.File;
-import java.io.IOException;
 import java.util.Collection;
 import java.util.Queue;
 import java.util.UUID;
@@ -86,32 +88,16 @@ public class JobManagerHAJobGraphRecoveryITCase extends TestLogger {
 
 	private final static FiniteDuration TestTimeOut = new FiniteDuration(5, TimeUnit.MINUTES);
 
-	private static final File FileStateBackendBasePath;
-
-	static {
-		try {
-			FileStateBackendBasePath = CommonTestUtils.createTempDirectory();
-		}
-		catch (IOException e) {
-			throw new RuntimeException("Error in test setup. Could not create directory.", e);
-		}
-	}
+	@Rule
+	public TemporaryFolder tempFolder = new TemporaryFolder();
 
 	@AfterClass
 	public static void tearDown() throws Exception {
 		ZooKeeper.shutdown();
-
-		if (FileStateBackendBasePath != null) {
-			FileUtils.deleteDirectory(FileStateBackendBasePath);
-		}
 	}
 
 	@Before
 	public void cleanUp() throws Exception {
-		if (FileStateBackendBasePath != null) {
-			FileUtils.cleanDirectory(FileStateBackendBasePath);
-		}
-
 		ZooKeeper.deleteAll();
 	}
 
@@ -123,7 +109,7 @@ public class JobManagerHAJobGraphRecoveryITCase extends TestLogger {
 	@Test
 	public void testJobPersistencyWhenJobManagerShutdown() throws Exception {
 		Configuration config = ZooKeeperTestUtils.createZooKeeperHAConfig(
-				ZooKeeper.getConnectString(), FileStateBackendBasePath.getPath());
+				ZooKeeper.getConnectString(), tempFolder.getRoot().getPath());
 
 		// Configure the cluster
 		config.setInteger(ConfigConstants.LOCAL_NUMBER_JOB_MANAGER, 1);
@@ -170,7 +156,7 @@ public class JobManagerHAJobGraphRecoveryITCase extends TestLogger {
 	@Test
 	public void testClientNonDetachedListeningBehaviour() throws Exception {
 		Configuration config = ZooKeeperTestUtils.createZooKeeperHAConfig(
-				ZooKeeper.getConnectString(), FileStateBackendBasePath.getPath());
+				ZooKeeper.getConnectString(), tempFolder.getRoot().getPath());
 
 		// Test actor system
 		ActorSystem testSystem = null;
@@ -182,6 +168,11 @@ public class JobManagerHAJobGraphRecoveryITCase extends TestLogger {
 		LeaderRetrievalService leaderRetrievalService = null;
 
 		ActorSystem taskManagerSystem = null;
+
+		final HighAvailabilityServices highAvailabilityServices = HighAvailabilityServicesUtils.createHighAvailabilityServices(
+			config,
+			TestingUtils.defaultExecutor(),
+			HighAvailabilityServicesUtils.AddressResolution.NO_ADDRESS_RESOLUTION);
 
 		try {
 			final Deadline deadline = TestTimeOut.fromNow();
@@ -199,15 +190,20 @@ public class JobManagerHAJobGraphRecoveryITCase extends TestLogger {
 
 			// Leader listener
 			TestingListener leaderListener = new TestingListener();
-			leaderRetrievalService = ZooKeeperUtils.createLeaderRetrievalService(config);
+			leaderRetrievalService = highAvailabilityServices.getJobManagerLeaderRetriever(HighAvailabilityServices.DEFAULT_JOB_ID);
 			leaderRetrievalService.start(leaderListener);
 
 			// The task manager
 			taskManagerSystem = AkkaUtils.createActorSystem(AkkaUtils.getDefaultAkkaConfig());
 			TaskManager.startTaskManagerComponentsAndActor(
-					config, ResourceID.generate(), taskManagerSystem, "localhost",
-					Option.<String>empty(), Option.<LeaderRetrievalService>empty(),
-					false, TaskManager.class);
+				config,
+				ResourceID.generate(),
+				taskManagerSystem,
+				highAvailabilityServices,
+				"localhost",
+				Option.<String>empty(),
+				false,
+				TaskManager.class);
 
 			// Client test actor
 			TestActorRef<RecordingTestClient> clientRef = TestActorRef.create(
@@ -327,6 +323,8 @@ public class JobManagerHAJobGraphRecoveryITCase extends TestLogger {
 			if (testSystem != null) {
 				testSystem.shutdown();
 			}
+
+			highAvailabilityServices.closeAndCleanupAllData();
 		}
 	}
 
@@ -383,10 +381,10 @@ public class JobManagerHAJobGraphRecoveryITCase extends TestLogger {
 	/**
 	 * Fails the test if the recovery state (file state backend and ZooKeeper) is not clean.
 	 */
-	private static void verifyCleanRecoveryState(Configuration config) throws Exception {
+	private void verifyCleanRecoveryState(Configuration config) throws Exception {
 		// File state backend empty
 		Collection<File> stateHandles = FileUtils.listFiles(
-				FileStateBackendBasePath, TrueFileFilter.INSTANCE, TrueFileFilter.INSTANCE);
+				tempFolder.getRoot(), TrueFileFilter.INSTANCE, TrueFileFilter.INSTANCE);
 
 		if (!stateHandles.isEmpty()) {
 			fail("File state backend is not clean: " + stateHandles);
@@ -415,10 +413,10 @@ public class JobManagerHAJobGraphRecoveryITCase extends TestLogger {
 	/**
 	 * Fails the test if the recovery state (file state backend and ZooKeeper) has been cleaned.
 	 */
-	private static void verifyRecoveryState(Configuration config) throws Exception {
+	private void verifyRecoveryState(Configuration config) throws Exception {
 		// File state backend empty
 		Collection<File> stateHandles = FileUtils.listFiles(
-			FileStateBackendBasePath, TrueFileFilter.INSTANCE, TrueFileFilter.INSTANCE);
+				tempFolder.getRoot(), TrueFileFilter.INSTANCE, TrueFileFilter.INSTANCE);
 
 		if (stateHandles.isEmpty()) {
 			fail("File state backend has been cleaned: " + stateHandles);

@@ -20,10 +20,11 @@ package org.apache.flink.streaming.runtime.tasks;
 
 import org.apache.flink.core.testutils.OneShotLatch;
 import org.apache.flink.streaming.runtime.operators.TestProcessingTimeServiceTest.ReferenceSettingExceptionHandler;
-
 import org.apache.flink.util.TestLogger;
+
 import org.junit.Test;
 
+import java.util.concurrent.CancellationException;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -36,6 +37,9 @@ import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
 
+/**
+ * Tests for {@link SystemProcessingTimeService}.
+ */
 public class SystemProcessingTimeServiceTest extends TestLogger {
 
 	@Test
@@ -73,7 +77,7 @@ public class SystemProcessingTimeServiceTest extends TestLogger {
 	}
 
 	/**
-	 * Tests that the schedule at fixed rate callback is called under the given lock
+	 * Tests that the schedule at fixed rate callback is called under the given lock.
 	 */
 	@Test
 	public void testScheduleAtFixedRateHoldsLock() throws Exception {
@@ -122,7 +126,7 @@ public class SystemProcessingTimeServiceTest extends TestLogger {
 	 * Tests that SystemProcessingTimeService#scheduleAtFixedRate is actually triggered multiple
 	 * times.
 	 */
-	@Test(timeout=10000)
+	@Test(timeout = 10000)
 	public void testScheduleAtFixedRate() throws Exception {
 		final Object lock = new Object();
 		final AtomicReference<Throwable> errorRef = new AtomicReference<>();
@@ -178,7 +182,16 @@ public class SystemProcessingTimeServiceTest extends TestLogger {
 			// this should cancel our future
 			timer.quiesceAndAwaitPending();
 
-			assertTrue(scheduledFuture.isCancelled());
+			// it may be that the cancelled status is not immediately visible after the
+			// termination (not necessary a volatile update), so we need to "get()" the cancellation
+			// exception to be on the safe side
+			try {
+				scheduledFuture.get();
+				fail("scheduled future is not cancelled");
+			}
+			catch (CancellationException ignored) {
+				// expected
+			}
 
 			scheduledFuture = timer.scheduleAtFixedRate(new ProcessingTimeCallback() {
 				@Override
@@ -302,7 +315,7 @@ public class SystemProcessingTimeServiceTest extends TestLogger {
 			latch.await();
 			timer.quiesceAndAwaitPending();
 
-			// should be able to immediately acquire the lock, since the task must have exited by now 
+			// should be able to immediately acquire the lock, since the task must have exited by now
 			assertTrue(scopeLock.tryLock());
 
 			// should be able to schedule more tasks (that never get executed)
@@ -317,7 +330,7 @@ public class SystemProcessingTimeServiceTest extends TestLogger {
 			// nothing should be scheduled right now
 			assertEquals(0, timer.getNumTasksScheduled());
 
-			// check that no asynchronous error was reported - that ensures that the newly scheduled 
+			// check that no asynchronous error was reported - that ensures that the newly scheduled
 			// triggerable did, in fact, not trigger
 			if (errorRef.get() != null) {
 				throw new Exception(errorRef.get());
@@ -387,7 +400,7 @@ public class SystemProcessingTimeServiceTest extends TestLogger {
 						latch.trigger();
 					}
 				}, lock);
-		
+
 		timeServiceProvider.registerTimer(System.currentTimeMillis(), new ProcessingTimeCallback() {
 			@Override
 			public void onProcessingTime(long timestamp) throws Exception {
@@ -422,7 +435,7 @@ public class SystemProcessingTimeServiceTest extends TestLogger {
 			}
 		},
 			0L,
-			100L	);
+			100L);
 
 		latch.await();
 		assertTrue(exceptionWasThrown.get());

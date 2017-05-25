@@ -23,10 +23,10 @@ import org.apache.flink.api.java.utils.ParameterTool;
 import org.apache.flink.client.program.ProgramParametrizationException;
 import org.apache.flink.graph.Graph;
 import org.apache.flink.graph.drivers.parameter.LongParameter;
-import org.apache.flink.graph.drivers.parameter.ParameterizedBase;
 import org.apache.flink.types.LongValue;
 import org.apache.flink.types.NullValue;
 
+import java.math.BigInteger;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -38,8 +38,7 @@ import static org.apache.flink.api.common.ExecutionConfig.PARALLELISM_DEFAULT;
  * Generate a {@link org.apache.flink.graph.generator.GridGraph}.
  */
 public class GridGraph
-extends ParameterizedBase
-implements Input<LongValue, NullValue, NullValue> {
+extends GeneratedGraph<LongValue> {
 
 	private static final String PREFIX = "dim";
 
@@ -55,7 +54,8 @@ implements Input<LongValue, NullValue, NullValue> {
 
 	@Override
 	public String getUsage() {
-		return "--dim0 size:wrap_endpoints [--dim1 size:wrap_endpoints [--dim2 ...]]" + super.getUsage();
+		return "--" + PREFIX + "0 size:wrap_endpoints [--" + PREFIX + " size:wrap_endpoints [--" + PREFIX + " ...]]"
+			+ super.getUsage();
 	}
 
 	@Override
@@ -67,10 +67,10 @@ implements Input<LongValue, NullValue, NullValue> {
 		Map<Integer, String> dimensionMap = new TreeMap<>();
 
 		// first parse all dimensions into a sorted map
-		for (Map.Entry<String, String> entry : parameterTool.toMap().entrySet()) {
-			if (entry.getKey().startsWith(PREFIX)) {
-				int dimensionId = Integer.parseInt(entry.getKey().substring(PREFIX.length()));
-				dimensionMap.put(dimensionId, entry.getValue());
+		for (String key : parameterTool.toMap().keySet()) {
+			if (key.startsWith(PREFIX)) {
+				int dimensionId = Integer.parseInt(key.substring(PREFIX.length()));
+				dimensionMap.put(dimensionId, parameterTool.get(key));
 			}
 		}
 
@@ -82,11 +82,27 @@ implements Input<LongValue, NullValue, NullValue> {
 
 	@Override
 	public String getIdentity() {
-		return getName() + " (" + dimensions + ")";
+		return getTypeName() + " " + getName() + " (" + dimensions + ")";
 	}
 
 	@Override
-	public Graph<LongValue, NullValue, NullValue> create(ExecutionEnvironment env) {
+	protected long vertexCount() {
+		// in Java 8 use Math.multiplyExact(long, long)
+		BigInteger vertexCount = BigInteger.ONE;
+		for (Dimension dimension : dimensions) {
+			vertexCount = vertexCount.multiply(BigInteger.valueOf(dimension.size));
+		}
+
+		if (vertexCount.compareTo(BigInteger.valueOf(Long.MAX_VALUE)) > 0) {
+			throw new ProgramParametrizationException("Number of vertices in grid graph '" + vertexCount +
+				"' is greater than Long.MAX_VALUE.");
+		}
+
+		return vertexCount.longValue();
+	}
+
+	@Override
+	public Graph<LongValue, NullValue, NullValue> generate(ExecutionEnvironment env) {
 		org.apache.flink.graph.generator.GridGraph graph = new org.apache.flink.graph.generator.GridGraph(env);
 
 		for (Dimension dimension : dimensions) {

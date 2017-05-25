@@ -18,16 +18,16 @@
 package org.apache.flink.client.program;
 
 import org.apache.flink.api.common.JobSubmissionResult;
-import org.apache.flink.configuration.ConfigConstants;
 import org.apache.flink.configuration.Configuration;
+import org.apache.flink.configuration.JobManagerOptions;
 import org.apache.flink.runtime.clusterframework.messages.GetClusterStatus;
 import org.apache.flink.runtime.clusterframework.messages.GetClusterStatusResponse;
+import org.apache.flink.runtime.highavailability.HighAvailabilityServices;
 import org.apache.flink.runtime.instance.ActorGateway;
 import org.apache.flink.runtime.jobgraph.JobGraph;
 import scala.concurrent.Await;
 import scala.concurrent.Future;
 
-import java.io.IOException;
 import java.net.URL;
 import java.util.Collections;
 import java.util.List;
@@ -38,8 +38,12 @@ import java.util.List;
  */
 public class StandaloneClusterClient extends ClusterClient {
 
-	public StandaloneClusterClient(Configuration config) throws IOException {
+	public StandaloneClusterClient(Configuration config) throws Exception {
 		super(config);
+	}
+
+	public StandaloneClusterClient(Configuration config, HighAvailabilityServices highAvailabilityServices) {
+		super(config, highAvailabilityServices);
 	}
 
 	@Override
@@ -48,9 +52,8 @@ public class StandaloneClusterClient extends ClusterClient {
 
 	@Override
 	public String getWebInterfaceURL() {
-		String host = this.getJobManagerAddress().getHostString();
-		int port = getFlinkConfiguration().getInteger(ConfigConstants.JOB_MANAGER_WEB_PORT_KEY,
-			ConfigConstants.DEFAULT_JOB_MANAGER_WEB_FRONTEND_PORT);
+		String host = getJobManagerAddress().getHostString();
+		int port = getFlinkConfiguration().getInteger(JobManagerOptions.WEB_PORT);
 		return "http://" +  host + ":" + port;
 	}
 
@@ -67,7 +70,7 @@ public class StandaloneClusterClient extends ClusterClient {
 				throw new RuntimeException("Received the wrong reply " + result + " from cluster.");
 			}
 		} catch (Exception e) {
-			throw new RuntimeException("Couldn't retrieve the Cluster status.", e);
+			throw new RuntimeException("Couldn't retrieve the cluster status.", e);
 		}
 	}
 

@@ -14,6 +14,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 package org.apache.flink.streaming.api.functions.source;
 
 import org.apache.flink.annotation.Internal;
@@ -39,6 +40,7 @@ import org.apache.flink.streaming.api.operators.StreamSourceContexts;
 import org.apache.flink.streaming.api.watermark.Watermark;
 import org.apache.flink.streaming.runtime.streamrecord.StreamRecord;
 import org.apache.flink.util.Preconditions;
+
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -51,8 +53,8 @@ import java.util.List;
 import java.util.PriorityQueue;
 import java.util.Queue;
 
-import static org.apache.flink.util.Preconditions.checkState;
 import static org.apache.flink.util.Preconditions.checkNotNull;
+import static org.apache.flink.util.Preconditions.checkState;
 
 /**
  * The operator that reads the {@link TimestampedFileInputSplit splits} received from the preceding
@@ -367,7 +369,7 @@ public class ContinuousFileReaderOperator<OUT> extends AbstractStreamOperator<OU
 
 		private List<TimestampedFileInputSplit> getReaderState() throws IOException {
 			List<TimestampedFileInputSplit> snapshot = new ArrayList<>(this.pendingSplits.size());
-			if (currentSplit != null ) {
+			if (currentSplit != null) {
 				if (this.format instanceof CheckpointableInputFormat && this.isSplitOpen) {
 					Serializable formatState =
 						((CheckpointableInputFormat<TimestampedFileInputSplit, Serializable>) this.format).getCurrentState();

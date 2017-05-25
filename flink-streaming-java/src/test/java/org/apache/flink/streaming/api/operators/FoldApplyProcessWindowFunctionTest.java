@@ -53,12 +53,16 @@ import org.apache.flink.streaming.runtime.operators.windowing.AccumulatingProces
 import org.apache.flink.streaming.runtime.operators.windowing.functions.InternalIterableProcessAllWindowFunction;
 import org.apache.flink.streaming.runtime.operators.windowing.functions.InternalIterableProcessWindowFunction;
 import org.apache.flink.util.Collector;
+
 import org.junit.Assert;
 import org.junit.Test;
 
 import java.util.ArrayList;
 import java.util.List;
 
+/**
+ * Tests for {@link FoldApplyProcessWindowFunction}.
+ */
 public class FoldApplyProcessWindowFunctionTest {
 
 	/**
@@ -131,7 +135,7 @@ public class FoldApplyProcessWindowFunctionTest {
 
 		transformations.add(new OneInputTransformation<>(source, "test", windowOperator, BasicTypeInfo.INT_TYPE_INFO, 1));
 
-		StreamGraph streamGraph = StreamGraphGenerator.generate(env, transformations, 1 /* default parallelism */);
+		StreamGraph streamGraph = StreamGraphGenerator.generate(env, transformations);
 
 		List<Integer> result = new ArrayList<>();
 		List<Integer> input = new ArrayList<>();
@@ -151,6 +155,16 @@ public class FoldApplyProcessWindowFunctionTest {
 			@Override
 			public TimeWindow window() {
 				return new TimeWindow(0, 1);
+			}
+
+			@Override
+			public long currentProcessingTime() {
+				return 0;
+			}
+
+			@Override
+			public long currentWatermark() {
+				return 0;
 			}
 
 			@Override
@@ -240,7 +254,7 @@ public class FoldApplyProcessWindowFunctionTest {
 
 		transformations.add(new OneInputTransformation<>(source, "test", windowOperator, BasicTypeInfo.INT_TYPE_INFO, 1));
 
-		StreamGraph streamGraph = StreamGraphGenerator.generate(env, transformations, 1 /* default parallelism */);
+		StreamGraph streamGraph = StreamGraphGenerator.generate(env, transformations);
 
 		List<Integer> result = new ArrayList<>();
 		List<Integer> input = new ArrayList<>();
@@ -280,7 +294,7 @@ public class FoldApplyProcessWindowFunctionTest {
 		Assert.assertEquals(expected, result);
 	}
 
-	public static class DummyKeyedStateStore implements KeyedStateStore {
+	private static class DummyKeyedStateStore implements KeyedStateStore {
 
 		@Override
 		public <T> ValueState<T> getState(ValueStateDescriptor<T> stateProperties) {
@@ -308,11 +322,7 @@ public class FoldApplyProcessWindowFunctionTest {
 		}
 	}
 
-	public static class DummyStreamExecutionEnvironment extends StreamExecutionEnvironment {
-
-		public DummyStreamExecutionEnvironment() {
-			super(1);
-		}
+	private static class DummyStreamExecutionEnvironment extends StreamExecutionEnvironment {
 
 		@Override
 		public JobExecutionResult execute(String jobName) throws Exception {

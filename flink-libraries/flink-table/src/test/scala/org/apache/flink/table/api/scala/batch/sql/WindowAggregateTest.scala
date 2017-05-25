@@ -21,7 +21,8 @@ package org.apache.flink.table.api.scala.batch.sql
 import java.sql.Timestamp
 
 import org.apache.flink.api.scala._
-import org.apache.flink.table.api.TableException
+import org.apache.flink.table.api.{TableException, ValidationException}
+import org.apache.flink.table.api.java.utils.UserDefinedAggFunctions.{OverAgg0, WeightedAvgWithMerge}
 import org.apache.flink.table.api.scala._
 import org.apache.flink.table.plan.logical._
 import org.apache.flink.table.utils.TableTestBase
@@ -29,6 +30,20 @@ import org.apache.flink.table.utils.TableTestUtil._
 import org.junit.Test
 
 class WindowAggregateTest extends TableTestBase {
+
+  /**
+    * OVER clause is necessary for [[OverAgg0]] window function.
+    */
+  @Test(expected = classOf[ValidationException])
+  def testOverAggregation(): Unit = {
+    val util = batchTestUtil()
+    util.addTable[(Int, Long, String, Timestamp)]("T", 'a, 'b, 'c, 'ts)
+    util.addFunction("overAgg", new OverAgg0)
+
+    val sqlQuery = "SELECT overAgg(b, a) FROM T GROUP BY TUMBLE(ts, INTERVAL '2' HOUR)"
+
+    util.tEnv.sql(sqlQuery)
+  }
 
   @Test
   def testNonPartitionedTumbleWindow(): Unit = {
@@ -40,18 +55,14 @@ class WindowAggregateTest extends TableTestBase {
 
     val expected =
       unaryNode(
-        "DataSetCalc",
+        "DataSetWindowAggregate",
         unaryNode(
-          "DataSetWindowAggregate",
-          unaryNode(
-            "DataSetCalc",
-            batchTableNode(0),
-            term("select", "ts, a, b")
-          ),
-          term("window", EventTimeTumblingGroupWindow(Some('w$), 'ts, 7200000.millis)),
-          term("select", "SUM(a) AS sumA, COUNT(b) AS cntB")
+          "DataSetCalc",
+          batchTableNode(0),
+          term("select", "ts, a, b")
         ),
-        term("select", "sumA, cntB")
+        term("window", TumblingGroupWindow('w$, 'ts, 7200000.millis)),
+        term("select", "SUM(a) AS sumA, COUNT(b) AS cntB")
       )
 
     util.verifySql(sqlQuery, expected)
@@ -63,7 +74,14 @@ class WindowAggregateTest extends TableTestBase {
     util.addTable[(Int, Long, String, Timestamp)]("T", 'a, 'b, 'c, 'ts)
 
     val sqlQuery =
-      "SELECT c, SUM(a) AS sumA, MIN(b) AS minB FROM T GROUP BY TUMBLE(ts, INTERVAL '4' MINUTE), c"
+      "SELECT " +
+        "  TUMBLE_START(ts, INTERVAL '4' MINUTE), " +
+        "  TUMBLE_END(ts, INTERVAL '4' MINUTE), " +
+        "  c, " +
+        "  SUM(a) AS sumA, " +
+        "  MIN(b) AS minB " +
+        "FROM T " +
+        "GROUP BY TUMBLE(ts, INTERVAL '4' MINUTE), c"
 
     val expected =
       unaryNode(
@@ -72,13 +90,41 @@ class WindowAggregateTest extends TableTestBase {
           "DataSetWindowAggregate",
           batchTableNode(0),
           term("groupBy", "c"),
-          term("window", EventTimeTumblingGroupWindow(Some('w$), 'ts, 240000.millis)),
-          term("select", "c, SUM(a) AS sumA, MIN(b) AS minB")
+          term("window", TumblingGroupWindow('w$, 'ts, 240000.millis)),
+          term("select", "c, SUM(a) AS sumA, MIN(b) AS minB, " +
+            "start('w$) AS w$start, end('w$) AS w$end")
         ),
-        term("select", "c, sumA, minB")
+        term("select", "CAST(w$start) AS w$start, CAST(w$end) AS w$end, c, sumA, minB")
       )
 
     util.verifySql(sqlQuery, expected)
+  }
+
+  @Test
+  def testTumbleWindowWithUdAgg() = {
+    val util = batchTestUtil()
+    util.addTable[(Int, Long, String, Timestamp)]("T", 'a, 'b, 'c, 'ts)
+
+    val weightedAvg = new WeightedAvgWithMerge
+    util.tEnv.registerFunction("weightedAvg", weightedAvg)
+
+    val sql = "SELECT weightedAvg(b, a) AS wAvg " +
+      "FROM T " +
+      "GROUP BY TUMBLE(ts, INTERVAL '4' MINUTE)"
+
+    val expected =
+      unaryNode(
+        "DataSetWindowAggregate",
+        unaryNode(
+          "DataSetCalc",
+          batchTableNode(0),
+          term("select", "ts, b, a")
+        ),
+        term("window", TumblingGroupWindow('w$, 'ts, 240000.millis)),
+        term("select", "weightedAvg(b, a) AS wAvg")
+      )
+
+    util.verifySql(sql, expected)
   }
 
   @Test
@@ -93,19 +139,15 @@ class WindowAggregateTest extends TableTestBase {
 
     val expected =
       unaryNode(
-        "DataSetCalc",
+        "DataSetWindowAggregate",
         unaryNode(
-          "DataSetWindowAggregate",
-          unaryNode(
-            "DataSetCalc",
-            batchTableNode(0),
-            term("select", "ts, a, b")
-          ),
-          term("window",
-            EventTimeSlidingGroupWindow(Some('w$), 'ts, 5400000.millis, 900000.millis)),
-          term("select", "SUM(a) AS sumA, COUNT(b) AS cntB")
+          "DataSetCalc",
+          batchTableNode(0),
+          term("select", "ts, a, b")
         ),
-        term("select", "sumA, cntB")
+        term("window",
+          SlidingGroupWindow('w$, 'ts, 5400000.millis, 900000.millis)),
+        term("select", "SUM(a) AS sumA, COUNT(b) AS cntB")
       )
 
     util.verifySql(sqlQuery, expected)
@@ -117,7 +159,12 @@ class WindowAggregateTest extends TableTestBase {
     util.addTable[(Int, Long, String, Long, Timestamp)]("T", 'a, 'b, 'c, 'd, 'ts)
 
     val sqlQuery =
-      "SELECT c, SUM(a) AS sumA, AVG(b) AS avgB " +
+      "SELECT " +
+        "  c, " +
+        "  HOP_END(ts, INTERVAL '1' HOUR, INTERVAL '3' HOUR), " +
+        "  HOP_START(ts, INTERVAL '1' HOUR, INTERVAL '3' HOUR), " +
+        "  SUM(a) AS sumA, " +
+        "  AVG(b) AS avgB " +
         "FROM T " +
         "GROUP BY HOP(ts, INTERVAL '1' HOUR, INTERVAL '3' HOUR), d, c"
 
@@ -129,10 +176,11 @@ class WindowAggregateTest extends TableTestBase {
           batchTableNode(0),
           term("groupBy", "c, d"),
           term("window",
-            EventTimeSlidingGroupWindow(Some('w$), 'ts, 10800000.millis, 3600000.millis)),
-          term("select", "c, d, SUM(a) AS sumA, AVG(b) AS avgB")
+            SlidingGroupWindow('w$, 'ts, 10800000.millis, 3600000.millis)),
+          term("select", "c, d, SUM(a) AS sumA, AVG(b) AS avgB, " +
+            "start('w$) AS w$start, end('w$) AS w$end")
         ),
-        term("select", "c, sumA, avgB")
+        term("select", "c, CAST(w$end) AS w$end, CAST(w$start) AS w$start, sumA, avgB")
       )
 
     util.verifySql(sqlQuery, expected)
@@ -148,18 +196,14 @@ class WindowAggregateTest extends TableTestBase {
 
     val expected =
       unaryNode(
-        "DataSetCalc",
+        "DataSetWindowAggregate",
         unaryNode(
-          "DataSetWindowAggregate",
-          unaryNode(
-            "DataSetCalc",
-            batchTableNode(0),
-            term("select", "ts")
-          ),
-          term("window", EventTimeSessionGroupWindow(Some('w$), 'ts, 1800000.millis)),
-          term("select", "COUNT(*) AS cnt")
+          "DataSetCalc",
+          batchTableNode(0),
+          term("select", "ts")
         ),
-        term("select", "cnt")
+        term("window", SessionGroupWindow('w$, 'ts, 1800000.millis)),
+        term("select", "COUNT(*) AS cnt")
       )
 
     util.verifySql(sqlQuery, expected)
@@ -171,7 +215,12 @@ class WindowAggregateTest extends TableTestBase {
     util.addTable[(Int, Long, String, Int, Timestamp)]("T", 'a, 'b, 'c, 'd, 'ts)
 
     val sqlQuery =
-      "SELECT c, d, SUM(a) AS sumA, MIN(b) AS minB " +
+      "SELECT " +
+        "  c, d, " +
+        "  SESSION_START(ts, INTERVAL '12' HOUR), " +
+        "  SESSION_END(ts, INTERVAL '12' HOUR), " +
+        "  SUM(a) AS sumA, " +
+        "  MIN(b) AS minB " +
         "FROM T " +
         "GROUP BY SESSION(ts, INTERVAL '12' HOUR), c, d"
 
@@ -182,10 +231,42 @@ class WindowAggregateTest extends TableTestBase {
           "DataSetWindowAggregate",
           batchTableNode(0),
           term("groupBy", "c, d"),
-          term("window", EventTimeSessionGroupWindow(Some('w$), 'ts, 43200000.millis)),
-          term("select", "c, d, SUM(a) AS sumA, MIN(b) AS minB")
+          term("window", SessionGroupWindow('w$, 'ts, 43200000.millis)),
+          term("select", "c, d, SUM(a) AS sumA, MIN(b) AS minB, " +
+            "start('w$) AS w$start, end('w$) AS w$end")
         ),
-        term("select", "c, d, sumA, minB")
+        term("select", "c, d, CAST(w$start) AS w$start, CAST(w$end) AS w$end, sumA, minB")
+      )
+
+    util.verifySql(sqlQuery, expected)
+  }
+
+  @Test
+  def testWindowEndOnly(): Unit = {
+    val util = batchTestUtil()
+    util.addTable[(Int, Long, String, Timestamp)]("T", 'a, 'b, 'c, 'ts)
+
+    val sqlQuery =
+      "SELECT " +
+        "  TUMBLE_END(ts, INTERVAL '4' MINUTE)" +
+        "FROM T " +
+        "GROUP BY TUMBLE(ts, INTERVAL '4' MINUTE), c"
+
+    val expected =
+      unaryNode(
+        "DataSetCalc",
+        unaryNode(
+          "DataSetWindowAggregate",
+          unaryNode(
+            "DataSetCalc",
+            batchTableNode(0),
+            term("select", "ts, c")
+          ),
+          term("groupBy", "c"),
+          term("window", TumblingGroupWindow('w$, 'ts, 240000.millis)),
+          term("select", "c, start('w$) AS w$start, end('w$) AS w$end")
+        ),
+        term("select", "CAST(w$end) AS w$end")
       )
 
     util.verifySql(sqlQuery, expected)
@@ -237,8 +318,21 @@ class WindowAggregateTest extends TableTestBase {
 
     val sql = "SELECT COUNT(*) " +
       "FROM T " +
-      "GROUP BY TUMBLE(proctime(), b * INTERVAL '1' MINUTE)"
+      "GROUP BY TUMBLE(ts, b * INTERVAL '1' MINUTE)"
     util.verifySql(sql, "n/a")
   }
 
+  @Test(expected = classOf[ValidationException])
+  def testTumbleWindowWithInvalidUdAggArgs() = {
+    val util = batchTestUtil()
+    util.addTable[(Int, Long, String, Timestamp)]("T", 'a, 'b, 'c, 'ts)
+
+    val weightedAvg = new WeightedAvgWithMerge
+    util.tEnv.registerFunction("weightedAvg", weightedAvg)
+
+    val sql = "SELECT weightedAvg(c, a) AS wAvg " +
+      "FROM T " +
+      "GROUP BY TUMBLE(ts, INTERVAL '4' MINUTE)"
+    util.verifySql(sql, "n/a")
+  }
 }

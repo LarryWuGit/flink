@@ -20,6 +20,7 @@ package org.apache.flink.graph;
 
 import org.apache.commons.lang3.StringEscapeUtils;
 import org.apache.commons.lang3.text.StrBuilder;
+import org.apache.flink.api.common.ExecutionConfig;
 import org.apache.flink.api.java.ExecutionEnvironment;
 import org.apache.flink.api.java.io.CsvOutputFormat;
 import org.apache.flink.api.java.utils.ParameterTool;
@@ -34,8 +35,10 @@ import org.apache.flink.graph.drivers.HITS;
 import org.apache.flink.graph.drivers.JaccardIndex;
 import org.apache.flink.graph.drivers.PageRank;
 import org.apache.flink.graph.drivers.TriangleListing;
+import org.apache.flink.graph.drivers.input.CirculantGraph;
 import org.apache.flink.graph.drivers.input.CompleteGraph;
 import org.apache.flink.graph.drivers.input.CycleGraph;
+import org.apache.flink.graph.drivers.input.EchoGraph;
 import org.apache.flink.graph.drivers.input.EmptyGraph;
 import org.apache.flink.graph.drivers.input.GridGraph;
 import org.apache.flink.graph.drivers.input.HypercubeGraph;
@@ -75,9 +78,11 @@ public class Runner {
 	private static final String OUTPUT = "output";
 
 	private static ParameterizedFactory<Input> inputFactory = new ParameterizedFactory<Input>()
+		.addClass(CirculantGraph.class)
 		.addClass(CompleteGraph.class)
 		.addClass(org.apache.flink.graph.drivers.input.CSV.class)
 		.addClass(CycleGraph.class)
+		.addClass(EchoGraph.class)
 		.addClass(EmptyGraph.class)
 		.addClass(GridGraph.class)
 		.addClass(HypercubeGraph.class)
@@ -108,7 +113,7 @@ public class Runner {
 
 		strBuilder
 			.appendNewLine()
-			.appendln("Select an algorithm to view usage: flink run opt/flink-gelly-examples_<version>.jar --algorithm <algorithm>")
+			.appendln("Select an algorithm to view usage: flink run examples/flink-gelly-examples_<version>.jar --algorithm <algorithm>")
 			.appendNewLine()
 			.appendln("Available algorithms:");
 
@@ -139,7 +144,7 @@ public class Runner {
 			.appendNewLine()
 			.appendln(algorithm.getLongDescription())
 			.appendNewLine()
-			.append("usage: flink run opt/flink-gelly-examples_<version>.jar --algorithm ")
+			.append("usage: flink run examples/flink-gelly-examples_<version>.jar --algorithm ")
 			.append(algorithmName)
 			.append(" [algorithm options] --input <input> [input options] --output <output> [output options]")
 			.appendNewLine()
@@ -188,20 +193,21 @@ public class Runner {
 	public static void main(String[] args) throws Exception {
 		// Set up the execution environment
 		final ExecutionEnvironment env = ExecutionEnvironment.getExecutionEnvironment();
+		ExecutionConfig config = env.getConfig();
 
 		// should not have any non-Flink data types
-		env.getConfig().disableAutoTypeRegistration();
-		env.getConfig().disableForceAvro();
-		env.getConfig().disableForceKryo();
+		config.disableAutoTypeRegistration();
+		config.disableForceAvro();
+		config.disableForceKryo();
 
 		ParameterTool parameters = ParameterTool.fromArgs(args);
-		env.getConfig().setGlobalJobParameters(parameters);
+		config.setGlobalJobParameters(parameters);
 
 		// integration tests run with with object reuse both disabled and enabled
 		if (parameters.has("__disable_object_reuse")) {
-			env.getConfig().disableObjectReuse();
+			config.disableObjectReuse();
 		} else {
-			env.getConfig().enableObjectReuse();
+			config.enableObjectReuse();
 		}
 
 		// Usage
@@ -234,7 +240,12 @@ public class Runner {
 
 		// Input
 
-		input.configure(parameters);
+		try {
+			input.configure(parameters);
+		} catch (RuntimeException ex) {
+			throw new ProgramParametrizationException(ex.getMessage());
+		}
+
 		Graph graph = input.create(env);
 
 		// Algorithm

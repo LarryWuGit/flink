@@ -268,7 +268,7 @@ val strictNext: Pattern[Event, _] = start.next("middle")
 </div>
 
 Non-strict contiguity means that other events are allowed to occur in-between two matching events.
-A non-strict contiguity pattern state can be created via the `followedBy` method.
+A non-strict contiguity pattern state can be created via the `followedBy` or `followedByAny` method.
 
 <div class="codetabs" markdown="1">
 <div data-lang="java" markdown="1">
@@ -282,6 +282,24 @@ Pattern<Event, ?> nonStrictNext = start.followedBy("middle");
 val nonStrictNext : Pattern[Event, _] = start.followedBy("middle")
 {% endhighlight %}
 </div>
+</div>
+
+For non-strict contiguity one can specify if only the first succeeding matching event will be matched, or
+all. In the latter case multiple matches will be emitted for the same beginning.
+
+<div class="codetabs" markdown="1">
+<div data-lang="java" markdown="1">
+{% highlight java %}
+Pattern<Event, ?> nonStrictNext = start.followedByAny("middle");
+{% endhighlight %}
+</div>
+
+<div data-lang="scala" markdown="1">
+{% highlight scala %}
+val nonStrictNext : Pattern[Event, _] = start.followedByAny("middle")
+{% endhighlight %}
+</div>
+
 </div>
 It is also possible to define a temporal constraint for the pattern to be valid.
 For example, one can define that a pattern should occur within 10 seconds via the `within` method. 
@@ -789,46 +807,7 @@ in event time.
 
 To also guarantee that elements across watermarks are processed in event-time order, Flink's CEP library assumes 
 *correctness of the watermark*, and considers as *late* elements whose timestamp is smaller than that of the last 
-seen watermark. Late elements are not further processed but they can be redirected to a [side output]
-({{ site.baseurl }}/dev/stream/side_output.html) dedicated to them.
-
-To access the stream of late elements, you first need to specify that you want to get the late data using 
-`.sideOutputLateData(OutputTag)` on the `PatternStream` returned using the `CEP.pattern(...)` call. If you do not do
-so, the late elements will be silently dropped. Then, you can get the side-output stream using the 
-`.getSideOutput(OutputTag)` on the aforementioned `PatternStream`, and providing as argument the output tag used in 
-the `.sideOutputLateData(OutputTag)`:
-
-<div class="codetabs" markdown="1">
-<div data-lang="java" markdown="1">
-{% highlight java %}
-final OutputTag<T> lateOutputTag = new OutputTag<T>("late-data"){};
-
-PatternStream<T> patternStream = CEP.pattern(...)
-    .sideOutputLateData(lateOutputTag);
-
-// main output with matches
-DataStream<O> result = patternStream.select(...)    
-
-// side output containing the late events
-DataStream<T> lateStream = patternStream.getSideOutput(lateOutputTag);
-{% endhighlight %}
-</div>
-
-<div data-lang="scala" markdown="1">
-{% highlight scala %}
-val lateOutputTag = OutputTag[T]("late-data")
-
-val patternStream: PatternStream[T] = CEP.pattern(...)
-    .sideOutputLateData(lateOutputTag)
-
-// main output with matches
-val result = patternStream.select(...)
-
-// side output containing the late events
-val lateStream = patternStream.getSideOutput(lateOutputTag)
-{% endhighlight %}
-</div>
-</div>
+seen watermark. Late elements are not further processed.
 
 ## Examples
 

@@ -35,9 +35,7 @@ import org.apache.flink.runtime.operators.testutils.UnregisteredTaskMetricsGroup
 import org.apache.flink.runtime.state.StreamStateHandle;
 import org.apache.flink.runtime.taskmanager.TaskManagerRuntimeInfo;
 import org.apache.flink.runtime.util.TestingTaskManagerRuntimeInfo;
-import org.apache.flink.streaming.api.functions.windowing.RichWindowFunction;
 import org.apache.flink.streaming.api.functions.windowing.ProcessWindowFunction;
-import org.apache.flink.streaming.api.functions.windowing.RichProcessWindowFunction;
 import org.apache.flink.streaming.api.functions.windowing.WindowFunction;
 import org.apache.flink.streaming.api.windowing.windows.TimeWindow;
 import org.apache.flink.streaming.runtime.operators.windowing.functions.InternalIterableProcessWindowFunction;
@@ -70,6 +68,9 @@ import static org.junit.Assert.fail;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
+/**
+ * Tests for {@link AccumulatingProcessingTimeWindowOperator}.
+ */
 @SuppressWarnings({"serial"})
 @PrepareForTest(InternalIterableWindowFunction.class)
 @RunWith(PowerMockRunner.class)
@@ -80,14 +81,14 @@ public class AccumulatingAlignedProcessingTimeWindowOperatorTest {
 
 	@SuppressWarnings("unchecked")
 	private final KeySelector<String, String> mockKeySelector = mock(KeySelector.class);
-	
+
 	private final KeySelector<Integer, Integer> identitySelector = new KeySelector<Integer, Integer>() {
 		@Override
 		public Integer getKey(Integer value) {
 			return value;
 		}
 	};
-	
+
 	private final InternalIterableWindowFunction<Integer, Integer, Integer, TimeWindow> validatingIdentityFunction =
 			new InternalIterableWindowFunction<>(new WindowFunction<Integer, Integer, Integer, TimeWindow>() {
 				@Override
@@ -117,7 +118,7 @@ public class AccumulatingAlignedProcessingTimeWindowOperatorTest {
 		ClosureCleaner.clean(validatingIdentityFunction, false);
 		ClosureCleaner.clean(validatingIdentityProcessFunction, false);
 	}
-	
+
 	// ------------------------------------------------------------------------
 
 	@After
@@ -134,9 +135,9 @@ public class AccumulatingAlignedProcessingTimeWindowOperatorTest {
 		assertTrue("Not all trigger threads where properly shut down",
 				StreamTask.TRIGGER_THREAD_GROUP.activeCount() == 0);
 	}
-	
+
 	// ------------------------------------------------------------------------
-	
+
 	@Test
 	public void testInvalidParameters() {
 		try {
@@ -144,7 +145,7 @@ public class AccumulatingAlignedProcessingTimeWindowOperatorTest {
 			assertInvalidParameter(10000L, -1L);
 			assertInvalidParameter(-1L, 1000L);
 			assertInvalidParameter(1000L, 2000L);
-			
+
 			// actual internal slide is too low here:
 			assertInvalidParameter(1000L, 999L);
 		}
@@ -153,12 +154,12 @@ public class AccumulatingAlignedProcessingTimeWindowOperatorTest {
 			fail(e.getMessage());
 		}
 	}
-	
+
 	@Test
 	public void testWindowSizeAndSlide() {
 		try {
 			AccumulatingProcessingTimeWindowOperator<String, String, String> op;
-			
+
 			op = new AccumulatingProcessingTimeWindowOperator<>(mockFunction, mockKeySelector,
 					StringSerializer.INSTANCE, StringSerializer.INSTANCE, 5000, 1000);
 			assertEquals(5000, op.getWindowSize());
@@ -222,7 +223,6 @@ public class AccumulatingAlignedProcessingTimeWindowOperatorTest {
 			assertTrue(op.getNextEvaluationTime() % 1000 == 0);
 			testHarness.close();
 
-
 			op = new AccumulatingProcessingTimeWindowOperator<>(mockFunction, mockKeySelector,
 					StringSerializer.INSTANCE, StringSerializer.INSTANCE, 1500, 1000);
 
@@ -280,7 +280,6 @@ public class AccumulatingAlignedProcessingTimeWindowOperatorTest {
 				testHarness.setProcessingTime(currentTime);
 			}
 
-
 			List<Integer> result = extractFromStreamRecords(testHarness.extractOutputStreamRecords());
 			assertEquals(numElements, result.size());
 
@@ -323,7 +322,6 @@ public class AccumulatingAlignedProcessingTimeWindowOperatorTest {
 				currentTime = currentTime + 10;
 				testHarness.setProcessingTime(currentTime);
 			}
-
 
 			List<Integer> result = extractFromStreamRecords(testHarness.extractOutputStreamRecords());
 			assertEquals(numElements, result.size());
@@ -478,7 +476,6 @@ public class AccumulatingAlignedProcessingTimeWindowOperatorTest {
 
 			testHarness.setProcessingTime(200);
 
-
 			List<Integer> result = extractFromStreamRecords(testHarness.extractOutputStreamRecords());
 			assertEquals(6, result.size());
 
@@ -526,7 +523,6 @@ public class AccumulatingAlignedProcessingTimeWindowOperatorTest {
 
 			testHarness.setProcessingTime(200);
 
-
 			List<Integer> result = extractFromStreamRecords(testHarness.extractOutputStreamRecords());
 			assertEquals(6, result.size());
 
@@ -568,7 +564,7 @@ public class AccumulatingAlignedProcessingTimeWindowOperatorTest {
 			List<Integer> result = extractFromStreamRecords(testHarness.extractOutputStreamRecords());
 
 			assertEquals(6, result.size());
-			
+
 			Collections.sort(result);
 			assertEquals(Arrays.asList(1, 1, 1, 2, 2, 2), result);
 
@@ -839,7 +835,6 @@ public class AccumulatingAlignedProcessingTimeWindowOperatorTest {
 			testHarness.restore(state);
 			testHarness.open();
 
-
 			// inject again the remaining elements
 			for (int i = numElementsFirst; i < numElements; i++) {
 				testHarness.processElement(new StreamRecord<>(i));
@@ -898,7 +893,7 @@ public class AccumulatingAlignedProcessingTimeWindowOperatorTest {
 			// inject some elements
 			final int numElements = 1000;
 			final int numElementsFirst = 700;
-			
+
 			for (int i = 0; i < numElementsFirst; i++) {
 				testHarness.processElement(new StreamRecord<>(i));
 			}
@@ -930,7 +925,6 @@ public class AccumulatingAlignedProcessingTimeWindowOperatorTest {
 			testHarness.setup();
 			testHarness.restore(state);
 			testHarness.open();
-
 
 			// inject again the remaining elements
 			for (int i = numElementsFirst; i < numElements; i++) {
@@ -964,13 +958,13 @@ public class AccumulatingAlignedProcessingTimeWindowOperatorTest {
 			fail(e.getMessage());
 		}
 	}
-	
+
 	@Test
 	public void testKeyValueStateInWindowFunction() {
 		try {
 
 			StatefulFunction.globalCounts.clear();
-			
+
 			// tumbling window that triggers every 20 milliseconds
 			AccumulatingProcessingTimeWindowOperator<Integer, Integer, Integer> op =
 					new AccumulatingProcessingTimeWindowOperator<>(
@@ -1008,7 +1002,7 @@ public class AccumulatingAlignedProcessingTimeWindowOperatorTest {
 
 			assertEquals(4, StatefulFunction.globalCounts.get(1).intValue());
 			assertEquals(4, StatefulFunction.globalCounts.get(2).intValue());
-			
+
 			testHarness.close();
 			op.dispose();
 		}
@@ -1017,13 +1011,13 @@ public class AccumulatingAlignedProcessingTimeWindowOperatorTest {
 			fail(e.getMessage());
 		}
 	}
-	
+
 	// ------------------------------------------------------------------------
-	
+
 	private void assertInvalidParameter(long windowSize, long windowSlide) {
 		try {
 			new AccumulatingProcessingTimeWindowOperator<String, String, String>(
-					mockFunction, mockKeySelector, 
+					mockFunction, mockKeySelector,
 					StringSerializer.INSTANCE, StringSerializer.INSTANCE,
 					windowSize, windowSlide);
 			fail("This should fail with an IllegalArgumentException");
@@ -1038,11 +1032,11 @@ public class AccumulatingAlignedProcessingTimeWindowOperatorTest {
 
 	// ------------------------------------------------------------------------
 
-	private static class StatefulFunction extends RichProcessWindowFunction<Integer, Integer, Integer, TimeWindow> {
+	private static class StatefulFunction extends ProcessWindowFunction<Integer, Integer, Integer, TimeWindow> {
 
 		// we use a concurrent map here even though there is no concurrency, to
 		// get "volatile" style access to entries
-		static final Map<Integer, Integer> globalCounts = new ConcurrentHashMap<>();
+		private static final Map<Integer, Integer> globalCounts = new ConcurrentHashMap<>();
 
 		private ValueState<Integer> state;
 
@@ -1055,16 +1049,16 @@ public class AccumulatingAlignedProcessingTimeWindowOperatorTest {
 
 		@Override
 		public void process(Integer key,
-						  Context context,
-						  Iterable<Integer> values,
-						  Collector<Integer> out) throws Exception {
+						Context context,
+						Iterable<Integer> values,
+						Collector<Integer> out) throws Exception {
 			for (Integer i : values) {
 				// we need to update this state before emitting elements. Else, the test's main
 				// thread will have received all output elements before the state is updated and
 				// the checks may fail
 				state.update(state.value() + 1);
 				globalCounts.put(key, state.value());
-				
+
 				out.collect(i);
 			}
 		}
@@ -1095,8 +1089,7 @@ public class AccumulatingAlignedProcessingTimeWindowOperatorTest {
 	}
 
 	private static StreamTask<?, ?> createMockTaskWithTimer(
-		final ProcessingTimeService timerService)
-	{
+		final ProcessingTimeService timerService) {
 		StreamTask<?, ?> mockTask = createMockTask();
 		when(mockTask.getProcessingTimeService()).thenReturn(timerService);
 		return mockTask;

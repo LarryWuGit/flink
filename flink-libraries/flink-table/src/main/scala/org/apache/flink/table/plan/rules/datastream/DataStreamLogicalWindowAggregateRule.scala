@@ -18,48 +18,48 @@
 
 package org.apache.flink.table.plan.rules.datastream
 
-import java.math.BigDecimal
+import java.math.{BigDecimal => JBigDecimal}
 
 import org.apache.calcite.rel.`type`.RelDataType
-import org.apache.calcite.rex.{RexBuilder, RexCall, RexLiteral, RexNode}
+import org.apache.calcite.rex._
+import org.apache.calcite.sql.`type`.SqlTypeName
 import org.apache.calcite.sql.fun.SqlStdOperatorTable
-import org.apache.flink.table.api.{TableException, Window}
 import org.apache.flink.table.api.scala.{Session, Slide, Tumble}
-import org.apache.flink.table.expressions.Literal
-import org.apache.flink.table.functions.TimeModeTypes
+import org.apache.flink.table.api.{TableException, Window}
+import org.apache.flink.table.calcite.FlinkTypeFactory
+import org.apache.flink.table.expressions.{Literal, ResolvedFieldReference, WindowReference}
 import org.apache.flink.table.plan.rules.common.LogicalWindowAggregateRule
 import org.apache.flink.table.typeutils.TimeIntervalTypeInfo
 
 class DataStreamLogicalWindowAggregateRule
   extends LogicalWindowAggregateRule("DataStreamLogicalWindowAggregateRule") {
 
-  /** Returns a zero literal of the correct time type */
+  /** Returns a reference to the time attribute with a time indicator type */
   override private[table] def getInAggregateGroupExpression(
-      rexBuilder: RexBuilder,
-      windowExpression: RexCall): RexNode = createZeroLiteral(rexBuilder, windowExpression)
-
-  /** Returns a zero literal of the correct time type */
-  override private[table] def getOutAggregateGroupExpression(
-      rexBuilder: RexBuilder,
-      windowExpression: RexCall): RexNode = createZeroLiteral(rexBuilder, windowExpression)
-
-  private def createZeroLiteral(
       rexBuilder: RexBuilder,
       windowExpression: RexCall): RexNode = {
 
-    val timeType = windowExpression.operands.get(0).getType
-    timeType match {
-      case TimeModeTypes.ROWTIME =>
-        rexBuilder.makeAbstractCast(
-          TimeModeTypes.ROWTIME,
-          rexBuilder.makeLiteral(0L, TimeModeTypes.ROWTIME, true))
-      case TimeModeTypes.PROCTIME =>
-        rexBuilder.makeAbstractCast(
-          TimeModeTypes.PROCTIME,
-          rexBuilder.makeLiteral(0L, TimeModeTypes.PROCTIME, true))
+    val timeAttribute = windowExpression.operands.get(0)
+    timeAttribute match {
+
+      case _ if FlinkTypeFactory.isTimeIndicatorType(timeAttribute.getType) =>
+        timeAttribute
+
       case _ =>
-        throw TableException(s"""Unexpected time type $timeType encountered""")
+        throw TableException(
+          s"""Time attribute expected but ${timeAttribute.getType} encountered.""")
     }
+  }
+
+  /** Returns a zero literal of a timestamp type */
+  override private[table] def getOutAggregateGroupExpression(
+      rexBuilder: RexBuilder,
+      windowExpression: RexCall): RexNode = {
+
+    rexBuilder.makeLiteral(
+      0L,
+      rexBuilder.getTypeFactory.createSqlType(SqlTypeName.TIMESTAMP),
+      true)
   }
 
   override private[table] def translateWindowExpression(
@@ -68,41 +68,43 @@ class DataStreamLogicalWindowAggregateRule
 
     def getOperandAsLong(call: RexCall, idx: Int): Long =
       call.getOperands.get(idx) match {
-        case v : RexLiteral => v.getValue.asInstanceOf[BigDecimal].longValue()
-        case _ => throw new TableException("Only constant window descriptors are supported")
+        case v: RexLiteral => v.getValue.asInstanceOf[JBigDecimal].longValue()
+        case _ => throw new TableException("Only constant window descriptors are supported.")
+      }
+
+    def getOperandAsTimeIndicator(call: RexCall, idx: Int): ResolvedFieldReference =
+      call.getOperands.get(idx) match {
+        case v: RexInputRef if FlinkTypeFactory.isTimeIndicatorType(v.getType) =>
+          ResolvedFieldReference(
+            rowType.getFieldList.get(v.getIndex).getName,
+            FlinkTypeFactory.toTypeInfo(v.getType))
+        case _ =>
+          throw new TableException("Window can only be defined over a time attribute column.")
       }
 
     windowExpr.getOperator match {
       case SqlStdOperatorTable.TUMBLE =>
+        val time = getOperandAsTimeIndicator(windowExpr, 0)
         val interval = getOperandAsLong(windowExpr, 1)
         val w = Tumble.over(Literal(interval, TimeIntervalTypeInfo.INTERVAL_MILLIS))
 
-        val window = windowExpr.getType match {
-          case TimeModeTypes.PROCTIME => w
-          case TimeModeTypes.ROWTIME => w.on("rowtime")
-        }
-        window.as("w$")
+        w.on(time).as(WindowReference("w$"))
 
       case SqlStdOperatorTable.HOP =>
+        val time = getOperandAsTimeIndicator(windowExpr, 0)
         val (slide, size) = (getOperandAsLong(windowExpr, 1), getOperandAsLong(windowExpr, 2))
         val w = Slide
           .over(Literal(size, TimeIntervalTypeInfo.INTERVAL_MILLIS))
           .every(Literal(slide, TimeIntervalTypeInfo.INTERVAL_MILLIS))
 
-        val window = windowExpr.getType match {
-          case TimeModeTypes.PROCTIME => w
-          case TimeModeTypes.ROWTIME => w.on("rowtime")
-        }
-        window.as("w$")
+        w.on(time).as(WindowReference("w$"))
+
       case SqlStdOperatorTable.SESSION =>
+        val time = getOperandAsTimeIndicator(windowExpr, 0)
         val gap = getOperandAsLong(windowExpr, 1)
         val w = Session.withGap(Literal(gap, TimeIntervalTypeInfo.INTERVAL_MILLIS))
 
-        val window = windowExpr.getType match {
-          case TimeModeTypes.PROCTIME => w
-          case TimeModeTypes.ROWTIME => w.on("rowtime")
-        }
-        window.as("w$")
+        w.on(time).as(WindowReference("w$"))
     }
   }
 }

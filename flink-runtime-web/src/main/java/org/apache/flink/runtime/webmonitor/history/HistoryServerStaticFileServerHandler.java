@@ -26,6 +26,8 @@ package org.apache.flink.runtime.webmonitor.history;
  * https://github.com/netty/netty/blob/4.0/example/src/main/java/io/netty/example/http/file/HttpStaticFileServerHandler.java
  *****************************************************************************/
 
+import org.apache.flink.runtime.webmonitor.files.StaticFileServerHandler;
+
 import io.netty.channel.ChannelFuture;
 import io.netty.channel.ChannelFutureListener;
 import io.netty.channel.ChannelHandler;
@@ -41,7 +43,6 @@ import io.netty.handler.codec.http.LastHttpContent;
 import io.netty.handler.codec.http.router.Routed;
 import io.netty.handler.ssl.SslHandler;
 import io.netty.handler.stream.ChunkedFile;
-import org.apache.flink.runtime.webmonitor.files.StaticFileServerHandler;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -70,10 +71,10 @@ import static org.apache.flink.util.Preconditions.checkNotNull;
  * Simple file server handler used by the {@link HistoryServer} that serves requests to web frontend's static files,
  * such as HTML, CSS, JS or JSON files.
  *
- * This code is based on the "HttpStaticFileServerHandler" from the Netty project's HTTP server
+ * <p>This code is based on the "HttpStaticFileServerHandler" from the Netty project's HTTP server
  * example.
- * 
- * This class is a copy of the {@link StaticFileServerHandler}. The differences are that the request path is
+ *
+ * <p>This class is a copy of the {@link StaticFileServerHandler}. The differences are that the request path is
  * modified to end on ".json" if it does not have a filename extension; when "index.html" is requested we load
  * "index_hs.html" instead to inject the modified HistoryServer WebInterface and that the caching of the "/joboverview"
  * page is prevented.
@@ -81,12 +82,12 @@ import static org.apache.flink.util.Preconditions.checkNotNull;
 @ChannelHandler.Sharable
 public class HistoryServerStaticFileServerHandler extends SimpleChannelInboundHandler<Routed> {
 
-	/** Default logger, if none is specified */
+	/** Default logger, if none is specified. */
 	private static final Logger LOG = LoggerFactory.getLogger(HistoryServerStaticFileServerHandler.class);
 
 	// ------------------------------------------------------------------------
 
-	/** The path in which the static documents are */
+	/** The path in which the static documents are. */
 	private final File rootPath;
 
 	public HistoryServerStaticFileServerHandler(File rootPath) throws IOException {
@@ -205,37 +206,44 @@ public class HistoryServerStaticFileServerHandler extends SimpleChannelInboundHa
 			StaticFileServerHandler.sendError(ctx, NOT_FOUND);
 			return;
 		}
-		long fileLength = raf.length();
 
-		HttpResponse response = new DefaultHttpResponse(HTTP_1_1, OK);
-		StaticFileServerHandler.setContentTypeHeader(response, file);
+		try {
+			long fileLength = raf.length();
 
-		// the job overview should be updated as soon as possible
-		if (!requestPath.equals("/joboverview.json")) {
-			StaticFileServerHandler.setDateAndCacheHeaders(response, file);
-		}
-		if (HttpHeaders.isKeepAlive(request)) {
-			response.headers().set(CONNECTION, HttpHeaders.Values.KEEP_ALIVE);
-		}
-		HttpHeaders.setContentLength(response, fileLength);
+			HttpResponse response = new DefaultHttpResponse(HTTP_1_1, OK);
+			StaticFileServerHandler.setContentTypeHeader(response, file);
 
-		// write the initial line and the header.
-		ctx.write(response);
+			// the job overview should be updated as soon as possible
+			if (!requestPath.equals("/joboverview.json")) {
+				StaticFileServerHandler.setDateAndCacheHeaders(response, file);
+			}
+			if (HttpHeaders.isKeepAlive(request)) {
+				response.headers().set(CONNECTION, HttpHeaders.Values.KEEP_ALIVE);
+			}
+			HttpHeaders.setContentLength(response, fileLength);
 
-		// write the content.
-		ChannelFuture lastContentFuture;
-		if (ctx.pipeline().get(SslHandler.class) == null) {
-			ctx.write(new DefaultFileRegion(raf.getChannel(), 0, fileLength), ctx.newProgressivePromise());
-			lastContentFuture = ctx.writeAndFlush(LastHttpContent.EMPTY_LAST_CONTENT);
-		} else {
-			lastContentFuture = ctx.writeAndFlush(new HttpChunkedInput(new ChunkedFile(raf, 0, fileLength, 8192)),
-				ctx.newProgressivePromise());
-			// HttpChunkedInput will write the end marker (LastHttpContent) for us.
-		}
+			// write the initial line and the header.
+			ctx.write(response);
 
-		// close the connection, if no keep-alive is needed
-		if (!HttpHeaders.isKeepAlive(request)) {
-			lastContentFuture.addListener(ChannelFutureListener.CLOSE);
+			// write the content.
+			ChannelFuture lastContentFuture;
+			if (ctx.pipeline().get(SslHandler.class) == null) {
+				ctx.write(new DefaultFileRegion(raf.getChannel(), 0, fileLength), ctx.newProgressivePromise());
+				lastContentFuture = ctx.writeAndFlush(LastHttpContent.EMPTY_LAST_CONTENT);
+			} else {
+				lastContentFuture = ctx.writeAndFlush(new HttpChunkedInput(new ChunkedFile(raf, 0, fileLength, 8192)),
+					ctx.newProgressivePromise());
+				// HttpChunkedInput will write the end marker (LastHttpContent) for us.
+			}
+
+			// close the connection, if no keep-alive is needed
+			if (!HttpHeaders.isKeepAlive(request)) {
+				lastContentFuture.addListener(ChannelFutureListener.CLOSE);
+			}
+		} catch (Exception e) {
+			raf.close();
+			LOG.error("Failed to serve file.", e);
+			StaticFileServerHandler.sendError(ctx, INTERNAL_SERVER_ERROR);
 		}
 	}
 

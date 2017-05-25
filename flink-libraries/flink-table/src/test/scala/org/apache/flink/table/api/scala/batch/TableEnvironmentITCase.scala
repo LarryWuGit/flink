@@ -20,14 +20,16 @@ package org.apache.flink.table.api.scala.batch
 
 import java.util
 
+import org.apache.flink.api.java.typeutils.GenericTypeInfo
 import org.apache.flink.api.scala._
-import org.apache.flink.table.api.scala._
 import org.apache.flink.api.scala.util.CollectionDataSets
-import org.apache.flink.table.api.scala.batch.utils.{TableProgramsCollectionTestBase, TableProgramsTestBase}
+import org.apache.flink.table.api.scala._
 import org.apache.flink.table.api.scala.batch.utils.TableProgramsTestBase.TableConfigMode
-import org.apache.flink.types.Row
+import org.apache.flink.table.api.scala.batch.utils.{TableProgramsCollectionTestBase, TableProgramsTestBase}
 import org.apache.flink.table.api.{TableEnvironment, TableException}
 import org.apache.flink.test.util.TestBaseUtils
+import org.apache.flink.types.Row
+import org.junit.Assert.assertTrue
 import org.junit._
 import org.junit.runner.RunWith
 import org.junit.runners.Parameterized
@@ -206,16 +208,6 @@ class TableEnvironmentITCase(
   }
 
   @Test(expected = classOf[TableException])
-  def testToTableWithToFewFields(): Unit = {
-    val env = ExecutionEnvironment.getExecutionEnvironment
-    val tEnv = TableEnvironment.getTableEnvironment(env, config)
-
-    CollectionDataSets.get3TupleDataSet(env)
-      // Must fail. Number of fields does not match.
-      .toTable(tEnv, 'a, 'b)
-  }
-
-  @Test(expected = classOf[TableException])
   def testToTableWithToManyFields(): Unit = {
     val env = ExecutionEnvironment.getExecutionEnvironment
     val tEnv = TableEnvironment.getTableEnvironment(env, config)
@@ -253,6 +245,34 @@ class TableEnvironmentITCase(
     // Must fail. as() can only have field references
     CollectionDataSets.get3TupleDataSet(env)
       .toTable(tEnv, 'a as 'foo, 'b, 'c)
+  }
+
+  @Test(expected = classOf[TableException])
+  def testGenericRow() {
+    val env = ExecutionEnvironment.getExecutionEnvironment
+    val tableEnv = TableEnvironment.getTableEnvironment(env, config)
+
+    // use null value the enforce GenericType
+    val dataSet = env.fromElements(Row.of(null))
+    assertTrue(dataSet.getType().isInstanceOf[GenericTypeInfo[_]])
+    assertTrue(dataSet.getType().getTypeClass == classOf[Row])
+
+    // Must fail. Cannot import DataSet<Row> with GenericTypeInfo.
+    tableEnv.fromDataSet(dataSet)
+  }
+
+  @Test(expected = classOf[TableException])
+  def testGenericRowWithAlias() {
+    val env = ExecutionEnvironment.getExecutionEnvironment
+    val tableEnv = TableEnvironment.getTableEnvironment(env, config)
+
+    // use null value the enforce GenericType
+    val dataSet = env.fromElements(Row.of(null))
+    assertTrue(dataSet.getType().isInstanceOf[GenericTypeInfo[_]])
+    assertTrue(dataSet.getType().getTypeClass == classOf[Row])
+
+    // Must fail. Cannot import DataSet<Row> with GenericTypeInfo.
+    tableEnv.fromDataSet(dataSet, "nullField")
   }
 }
 

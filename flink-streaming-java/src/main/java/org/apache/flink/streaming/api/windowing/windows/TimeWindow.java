@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -15,10 +15,11 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 package org.apache.flink.streaming.api.windowing.windows;
 
 import org.apache.flink.annotation.PublicEvolving;
-import org.apache.flink.api.common.typeutils.TypeSerializer;
+import org.apache.flink.api.common.typeutils.base.TypeSerializerSingleton;
 import org.apache.flink.api.java.tuple.Tuple2;
 import org.apache.flink.core.memory.DataInputView;
 import org.apache.flink.core.memory.DataOutputView;
@@ -52,7 +53,7 @@ public class TimeWindow extends Window {
 	/**
 	 * Gets the starting timestamp of the window. This is the first timestamp that belongs
 	 * to this window.
-	 * 
+	 *
 	 * @return The starting timestamp of this window.
 	 */
 	public long getStart() {
@@ -62,7 +63,7 @@ public class TimeWindow extends Window {
 	/**
 	 * Gets the end timestamp of this window. The end timestamp is exclusive, meaning it
 	 * is the first timestamp that does not belong to this window any more.
-	 * 
+	 *
 	 * @return The exclusive end timestamp of this window.
 	 */
 	public long getEnd() {
@@ -71,12 +72,12 @@ public class TimeWindow extends Window {
 
 	/**
 	 * Gets the largest timestamp that still belongs to this window.
-	 * 
+	 *
 	 * <p>This timestamp is identical to {@code getEnd() - 1}.
-	 * 
+	 *
 	 * @return The largest timestamp that still belongs to this window.
-	 * 
-	 * @see #getEnd() 
+	 *
+	 * @see #getEnd()
 	 */
 	@Override
 	public long maxTimestamp() {
@@ -131,17 +132,12 @@ public class TimeWindow extends Window {
 	/**
 	 * The serializer used to write the TimeWindow type.
 	 */
-	public static class Serializer extends TypeSerializer<TimeWindow> {
+	public static class Serializer extends TypeSerializerSingleton<TimeWindow> {
 		private static final long serialVersionUID = 1L;
 
 		@Override
 		public boolean isImmutableType() {
 			return true;
-		}
-
-		@Override
-		public TypeSerializer<TimeWindow> duplicate() {
-			return this;
 		}
 
 		@Override
@@ -189,18 +185,8 @@ public class TimeWindow extends Window {
 		}
 
 		@Override
-		public boolean equals(Object obj) {
-			return obj instanceof Serializer;
-		}
-
-		@Override
 		public boolean canEqual(Object obj) {
 			return obj instanceof Serializer;
-		}
-
-		@Override
-		public int hashCode() {
-			return 0;
 		}
 	}
 

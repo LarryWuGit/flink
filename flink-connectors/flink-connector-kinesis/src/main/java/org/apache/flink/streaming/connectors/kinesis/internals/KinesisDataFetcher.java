@@ -19,9 +19,7 @@ package org.apache.flink.streaming.connectors.kinesis.internals;
 
 import org.apache.flink.api.common.functions.RuntimeContext;
 import org.apache.flink.streaming.api.functions.source.SourceFunction;
-import org.apache.flink.streaming.connectors.kinesis.FlinkKinesisConsumer;
 import org.apache.flink.streaming.connectors.kinesis.config.ConsumerConfigConstants;
-import org.apache.flink.streaming.connectors.kinesis.config.ConsumerConfigConstants.InitialPosition;
 import org.apache.flink.streaming.connectors.kinesis.model.KinesisStreamShard;
 import org.apache.flink.streaming.connectors.kinesis.model.KinesisStreamShardState;
 import org.apache.flink.streaming.connectors.kinesis.model.SentinelSequenceNumber;
@@ -99,12 +97,6 @@ public class KinesisDataFetcher<T> {
 
 	private final int indexOfThisConsumerSubtask;
 
-	/**
-	 * This flag should be set by {@link FlinkKinesisConsumer} using
-	 * {@link KinesisDataFetcher#setIsRestoringFromFailure(boolean)}
-	 */
-	private boolean isRestoredFromFailure;
-
 	// ------------------------------------------------------------------------
 	//  Executor services to run created threads
 	// ------------------------------------------------------------------------
@@ -149,7 +141,7 @@ public class KinesisDataFetcher<T> {
 	private final KinesisProxyInterface kinesis;
 
 	/** Thread that executed runFetcher() */
-	private Thread mainThread;
+	private volatile Thread mainThread;
 
 	/**
 	 * The current number of shards that are actively read by this fetcher.
@@ -235,41 +227,7 @@ public class KinesisDataFetcher<T> {
 		//  Procedures before starting the infinite while loop:
 		// ------------------------------------------------------------------------
 
-		//  1. query for any new shards that may have been created while the Kinesis consumer was not running,
-		//     and register them to the subscribedShardState list.
-		if (LOG.isDebugEnabled()) {
-			String logFormat = (!isRestoredFromFailure)
-				? "Subtask {} is trying to discover initial shards ..."
-				: "Subtask {} is trying to discover any new shards that were created while the consumer wasn't " +
-				"running due to failure ...";
-
-			LOG.debug(logFormat, indexOfThisConsumerSubtask);
-		}
-		List<KinesisStreamShard> newShardsCreatedWhileNotRunning = discoverNewShardsToSubscribe();
-		for (KinesisStreamShard shard : newShardsCreatedWhileNotRunning) {
-			// the starting state for new shards created while the consumer wasn't running depends on whether or not
-			// we are starting fresh (not restoring from a checkpoint); when we are starting fresh, this simply means
-			// all existing shards of streams we are subscribing to are new shards; when we are restoring from checkpoint,
-			// any new shards due to Kinesis resharding from the time of the checkpoint will be considered new shards.
-			InitialPosition initialPosition = InitialPosition.valueOf(configProps.getProperty(
-				ConsumerConfigConstants.STREAM_INITIAL_POSITION, ConsumerConfigConstants.DEFAULT_STREAM_INITIAL_POSITION));
-
-			SentinelSequenceNumber startingStateForNewShard = (isRestoredFromFailure)
-				? SentinelSequenceNumber.SENTINEL_EARLIEST_SEQUENCE_NUM
-				: initialPosition.toSentinelSequenceNumber();
-
-			if (LOG.isInfoEnabled()) {
-				String logFormat = (!isRestoredFromFailure)
-					? "Subtask {} will be seeded with initial shard {}, starting state set as sequence number {}"
-					: "Subtask {} will be seeded with new shard {} that was created while the consumer wasn't " +
-					"running due to failure, starting state set as sequence number {}";
-
-				LOG.info(logFormat, indexOfThisConsumerSubtask, shard.toString(), startingStateForNewShard.get());
-			}
-			registerNewSubscribedShardState(new KinesisStreamShardState(shard, startingStateForNewShard.get()));
-		}
-
-		//  2. check that there is at least one shard in the subscribed streams to consume from (can be done by
+		//  1. check that there is at least one shard in the subscribed streams to consume from (can be done by
 		//     checking if at least one value in subscribedStreamsToLastDiscoveredShardIds is not null)
 		boolean hasShards = false;
 		StringBuilder streamsWithNoShardsFound = new StringBuilder();
@@ -290,7 +248,7 @@ public class KinesisDataFetcher<T> {
 			throw new RuntimeException("No shards can be found for all subscribed streams: " + streams);
 		}
 
-		//  3. start consuming any shard state we already have in the subscribedShardState up to this point; the
+		//  2. start consuming any shard state we already have in the subscribedShardState up to this point; the
 		//     subscribedShardState may already be seeded with values due to step 1., or explicitly added by the
 		//     consumer using a restored state checkpoint
 		for (int seededStateIndex = 0; seededStateIndex < subscribedShardsState.size(); seededStateIndex++) {
@@ -408,7 +366,10 @@ public class KinesisDataFetcher<T> {
 	 */
 	public void shutdownFetcher() {
 		running = false;
-		mainThread.interrupt(); // the main thread may be sleeping for the discovery interval
+
+		if (mainThread != null) {
+			mainThread.interrupt(); // the main thread may be sleeping for the discovery interval
+		}
 
 		if (LOG.isInfoEnabled()) {
 			LOG.info("Shutting down the shard consumer threads of subtask {} ...", indexOfThisConsumerSubtask);
@@ -458,7 +419,7 @@ public class KinesisDataFetcher<T> {
 	 * 3. Update the subscribedStreamsToLastDiscoveredShardIds state so that we won't get shards
 	 *    that we have already seen before the next time this function is called
 	 */
-	private List<KinesisStreamShard> discoverNewShardsToSubscribe() throws InterruptedException {
+	public List<KinesisStreamShard> discoverNewShardsToSubscribe() throws InterruptedException {
 
 		List<KinesisStreamShard> newShardsToSubscribe = new LinkedList<>();
 
@@ -485,10 +446,6 @@ public class KinesisDataFetcher<T> {
 	// ------------------------------------------------------------------------
 	//  Functions to get / set information about the consumer
 	// ------------------------------------------------------------------------
-
-	public void setIsRestoringFromFailure(boolean bool) {
-		this.isRestoredFromFailure = bool;
-	}
 
 	protected Properties getConsumerConfiguration() {
 		return configProps;
@@ -592,7 +549,7 @@ public class KinesisDataFetcher<T> {
 	 * @param totalNumberOfConsumerSubtasks total number of consumer subtasks
 	 * @param indexOfThisConsumerSubtask index of this consumer subtask
 	 */
-	private static boolean isThisSubtaskShouldSubscribeTo(KinesisStreamShard shard,
+	public static boolean isThisSubtaskShouldSubscribeTo(KinesisStreamShard shard,
 														int totalNumberOfConsumerSubtasks,
 														int indexOfThisConsumerSubtask) {
 		return (Math.abs(shard.hashCode() % totalNumberOfConsumerSubtasks)) == indexOfThisConsumerSubtask;

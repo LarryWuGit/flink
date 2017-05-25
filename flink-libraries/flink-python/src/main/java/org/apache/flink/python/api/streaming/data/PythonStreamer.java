@@ -10,6 +10,7 @@
  * an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License for the
  * specific language governing permissions and limitations under the License.
  */
+
 package org.apache.flink.python.api.streaming.data;
 
 import org.apache.flink.api.common.functions.AbstractRichFunction;
@@ -19,6 +20,8 @@ import org.apache.flink.python.api.PythonOptions;
 import org.apache.flink.python.api.streaming.util.SerializationUtils.IntSerializer;
 import org.apache.flink.python.api.streaming.util.SerializationUtils.StringSerializer;
 import org.apache.flink.python.api.streaming.util.StreamPrinter;
+import org.apache.flink.util.ExceptionUtils;
+
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -114,13 +117,7 @@ public class PythonStreamer<S extends PythonSender, OUT> implements Serializable
 
 		String pythonBinaryPath = config.getString(PythonOptions.PYTHON_BINARY_PATH);
 
-		try {
-			Runtime.getRuntime().exec(pythonBinaryPath);
-		} catch (IOException ignored) {
-			throw new RuntimeException(pythonBinaryPath + " does not point to a valid python binary.");
-		}
-
-		process = Runtime.getRuntime().exec(pythonBinaryPath + " -O -B " + planPath + config.getString(PLAN_ARGUMENTS_KEY, ""));
+		process = Runtime.getRuntime().exec(new String[] {pythonBinaryPath, "-O", "-B", planPath, config.getString(PLAN_ARGUMENTS_KEY, "")});
 		outPrinter = new Thread(new StreamPrinter(process.getInputStream()));
 		outPrinter.start();
 		errorPrinter = new Thread(new StreamPrinter(process.getErrorStream(), msg));
@@ -130,8 +127,9 @@ public class PythonStreamer<S extends PythonSender, OUT> implements Serializable
 			@Override
 			public void run() {
 				try {
-					destroyProcess();
-				} catch (IOException ignored) {
+					destroyProcess(process);
+				} catch (IOException ioException) {
+					LOG.warn("Could not destroy python process.", ioException);
 				}
 			}
 		};
@@ -192,20 +190,30 @@ public class PythonStreamer<S extends PythonSender, OUT> implements Serializable
 	 * @throws IOException
 	 */
 	public void close() throws IOException {
+		Throwable throwable = null;
+
 		try {
 			socket.close();
 			sender.close();
 			receiver.close();
-		} catch (Exception e) {
-			LOG.error("Exception occurred while closing Streamer. :{}", e.getMessage());
+		} catch (Throwable t) {
+			throwable = t;
 		}
-		destroyProcess();
+
+		try {
+			destroyProcess(process);
+		} catch (Throwable t) {
+			throwable = ExceptionUtils.firstOrSuppressed(t, throwable);
+		}
+
 		if (shutdownThread != null) {
 			Runtime.getRuntime().removeShutdownHook(shutdownThread);
 		}
+
+		ExceptionUtils.tryRethrowIOException(throwable);
 	}
 
-	private void destroyProcess() throws IOException {
+	public static void destroyProcess(Process process) throws IOException {
 		try {
 			process.exitValue();
 		} catch (IllegalThreadStateException ignored) { //process still active

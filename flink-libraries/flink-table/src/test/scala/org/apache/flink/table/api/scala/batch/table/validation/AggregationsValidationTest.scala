@@ -20,11 +20,24 @@ package org.apache.flink.table.api.scala.batch.table.validation
 
 import org.apache.flink.api.scala._
 import org.apache.flink.api.scala.util.CollectionDataSets
+import org.apache.flink.table.api.java.utils.UserDefinedAggFunctions.{OverAgg0, WeightedAvgWithMergeAndReset}
 import org.apache.flink.table.api.scala._
 import org.apache.flink.table.api.{TableEnvironment, ValidationException}
 import org.junit._
 
 class AggregationsValidationTest {
+
+  /**
+    * OVER clause is necessary for [[OverAgg0]] window function.
+    */
+  @Test(expected = classOf[ValidationException])
+  def testOverAggregation(): Unit = {
+    val env = ExecutionEnvironment.getExecutionEnvironment
+    val tableEnv = TableEnvironment.getTableEnvironment(env)
+    val input = CollectionDataSets.get3TupleDataSet(env).toTable(tableEnv, 'a, 'b, 'c)
+    val overAgg = new OverAgg0
+    input.select('c.count, overAgg('b, 'a))
+  }
 
   @Test(expected = classOf[ValidationException])
   def testNonWorkingAggregationDataTypes(): Unit = {
@@ -85,6 +98,50 @@ class AggregationsValidationTest {
 
   @Test(expected = classOf[ValidationException])
   @throws[Exception]
+  def testInvalidUdAggArgs() {
+    val env= ExecutionEnvironment.getExecutionEnvironment
+    val tableEnv = TableEnvironment.getTableEnvironment(env)
+
+    val myWeightedAvg = new WeightedAvgWithMergeAndReset
+
+    val input = CollectionDataSets.get3TupleDataSet(env).toTable(tableEnv, 'a, 'b, 'c)
+    input
+      // must fail. UDAGG does not accept String type
+      .select(myWeightedAvg('c, 'a))
+  }
+
+  @Test(expected = classOf[ValidationException])
+  @throws[Exception]
+  def testGroupingInvalidUdAggArgs() {
+    val env = ExecutionEnvironment.getExecutionEnvironment
+    val tableEnv = TableEnvironment.getTableEnvironment(env)
+
+    val myWeightedAvg = new WeightedAvgWithMergeAndReset
+
+    val input = CollectionDataSets.get3TupleDataSet(env).toTable(tableEnv, 'a, 'b, 'c)
+    input
+      .groupBy('b)
+      // must fail. UDAGG does not accept String type
+      .select(myWeightedAvg('c, 'a))
+  }
+
+  @Test(expected = classOf[ValidationException])
+  @throws[Exception]
+  def testGroupingNestedUdAgg() {
+    val env = ExecutionEnvironment.getExecutionEnvironment
+    val tableEnv = TableEnvironment.getTableEnvironment(env)
+
+    val myWeightedAvg = new WeightedAvgWithMergeAndReset
+
+    val input = CollectionDataSets.get3TupleDataSet(env).toTable(tableEnv, 'a, 'b, 'c)
+    input
+      .groupBy('c)
+      // must fail. UDAGG does not accept String type
+      .select(myWeightedAvg(myWeightedAvg('b, 'a), 'a))
+  }
+
+  @Test(expected = classOf[ValidationException])
+  @throws[Exception]
   def testAggregationOnNonExistingFieldJava() {
     val env = ExecutionEnvironment.getExecutionEnvironment
     val tableEnv = TableEnvironment.getTableEnvironment(env)
@@ -105,7 +162,7 @@ class AggregationsValidationTest {
   @Test(expected = classOf[ValidationException])
   @throws[Exception]
   def testNoNestedAggregationsJava() {
-    val env= ExecutionEnvironment.getExecutionEnvironment
+    val env = ExecutionEnvironment.getExecutionEnvironment
     val tableEnv = TableEnvironment.getTableEnvironment(env)
     val table = env.fromElements((1f, "Hello")).toTable(tableEnv)
     // Must fail. Aggregation on aggregation not allowed.
@@ -115,7 +172,7 @@ class AggregationsValidationTest {
   @Test(expected = classOf[ValidationException])
   @throws[Exception]
   def testGroupingOnNonExistentFieldJava() {
-    val env= ExecutionEnvironment.getExecutionEnvironment
+    val env = ExecutionEnvironment.getExecutionEnvironment
     val tableEnv = TableEnvironment.getTableEnvironment(env)
     val input = CollectionDataSets.get3TupleDataSet(env).toTable(tableEnv, 'a, 'b, 'c)
     input
@@ -127,13 +184,67 @@ class AggregationsValidationTest {
   @Test(expected = classOf[ValidationException])
   @throws[Exception]
   def testGroupingInvalidSelectionJava() {
-    val env= ExecutionEnvironment.getExecutionEnvironment
+    val env = ExecutionEnvironment.getExecutionEnvironment
     val tableEnv = TableEnvironment.getTableEnvironment(env)
     val input = CollectionDataSets.get3TupleDataSet(env).toTable(tableEnv, 'a, 'b, 'c)
     input
       .groupBy("a, b")
       // must fail. Field c is not a grouping key or aggregation
       .select("c")
+  }
+
+  @Test(expected = classOf[ValidationException])
+  @throws[Exception]
+  def testUnknownUdAggJava() {
+    val env = ExecutionEnvironment.getExecutionEnvironment
+    val tableEnv = TableEnvironment.getTableEnvironment(env)
+    val input = CollectionDataSets.get3TupleDataSet(env).toTable(tableEnv, 'a, 'b, 'c)
+    input
+      // must fail. unknown is not known
+      .select("unknown(c)")
+  }
+
+  @Test(expected = classOf[ValidationException])
+  @throws[Exception]
+  def testGroupingUnknownUdAggJava() {
+    val env = ExecutionEnvironment.getExecutionEnvironment
+    val tableEnv = TableEnvironment.getTableEnvironment(env)
+    val input = CollectionDataSets.get3TupleDataSet(env).toTable(tableEnv, 'a, 'b, 'c)
+    input
+      .groupBy("a, b")
+      // must fail. unknown is not known
+      .select("unknown(c)")
+  }
+
+  @Test(expected = classOf[ValidationException])
+  @throws[Exception]
+  def testInvalidUdAggArgsJava() {
+    val env = ExecutionEnvironment.getExecutionEnvironment
+    val tableEnv = TableEnvironment.getTableEnvironment(env)
+
+    val myWeightedAvg = new WeightedAvgWithMergeAndReset
+    tableEnv.registerFunction("myWeightedAvg", myWeightedAvg)
+
+    val input = CollectionDataSets.get3TupleDataSet(env).toTable(tableEnv, 'a, 'b, 'c)
+    input
+      // must fail. UDAGG does not accept String type
+      .select("myWeightedAvg(c, a)")
+  }
+
+  @Test(expected = classOf[ValidationException])
+  @throws[Exception]
+  def testGroupingInvalidUdAggArgsJava() {
+    val env = ExecutionEnvironment.getExecutionEnvironment
+    val tableEnv = TableEnvironment.getTableEnvironment(env)
+
+    val myWeightedAvg = new WeightedAvgWithMergeAndReset
+    tableEnv.registerFunction("myWeightedAvg", myWeightedAvg)
+
+    val input = CollectionDataSets.get3TupleDataSet(env).toTable(tableEnv, 'a, 'b, 'c)
+    input
+      .groupBy("b")
+      // must fail. UDAGG does not accept String type
+      .select("myWeightedAvg(c, a)")
   }
 
 }

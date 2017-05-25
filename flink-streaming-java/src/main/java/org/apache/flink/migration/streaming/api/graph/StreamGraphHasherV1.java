@@ -18,9 +18,6 @@
 
 package org.apache.flink.migration.streaming.api.graph;
 
-import com.google.common.hash.HashFunction;
-import com.google.common.hash.Hasher;
-import com.google.common.hash.Hashing;
 import org.apache.flink.streaming.api.graph.StreamEdge;
 import org.apache.flink.streaming.api.graph.StreamGraph;
 import org.apache.flink.streaming.api.graph.StreamGraphHasher;
@@ -29,6 +26,10 @@ import org.apache.flink.streaming.api.operators.AbstractUdfStreamOperator;
 import org.apache.flink.streaming.api.operators.ChainingStrategy;
 import org.apache.flink.streaming.api.operators.StreamOperator;
 import org.apache.flink.streaming.runtime.partitioner.ForwardPartitioner;
+
+import com.google.common.hash.HashFunction;
+import com.google.common.hash.Hasher;
+import com.google.common.hash.Hashing;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -154,19 +155,6 @@ public class StreamGraphHasherV1 implements StreamGraphHasher {
 
 			return true;
 		} else {
-			// Check that this node is not part of a chain. This is currently
-			// not supported, because the runtime takes the snapshots by the
-			// operator ID of the first vertex in a chain. It's OK if the node
-			// has chained outputs.
-			for (StreamEdge inEdge : node.getInEdges()) {
-				if (isChainable(inEdge, isChainingEnabled)) {
-					throw new UnsupportedOperationException("Cannot assign user-specified hash "
-							+ "to intermediate node in chain. This will be supported in future "
-							+ "versions of Flink. As a work around start new chain at task "
-							+ node.getOperatorName() + ".");
-				}
-			}
-
 			Hasher hasher = hashFunction.newHasher();
 			byte[] hash = generateUserSpecifiedHash(node, hasher);
 

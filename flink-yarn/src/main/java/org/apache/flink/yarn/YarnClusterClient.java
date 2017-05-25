@@ -19,6 +19,7 @@ package org.apache.flink.yarn;
 
 import akka.actor.ActorRef;
 
+import akka.actor.ActorSystem;
 import akka.actor.Props;
 import akka.pattern.Patterns;
 import akka.util.Timeout;
@@ -32,9 +33,9 @@ import org.apache.flink.runtime.clusterframework.messages.GetClusterStatus;
 import org.apache.flink.runtime.clusterframework.messages.GetClusterStatusResponse;
 import org.apache.flink.runtime.clusterframework.messages.InfoMessage;
 import org.apache.flink.runtime.clusterframework.messages.ShutdownClusterAfterJob;
+import org.apache.flink.runtime.highavailability.HighAvailabilityServices;
 import org.apache.flink.runtime.jobgraph.JobGraph;
-import org.apache.flink.runtime.leaderretrieval.LeaderRetrievalService;
-import org.apache.flink.runtime.util.LeaderRetrievalUtils;
+import org.apache.flink.util.FlinkException;
 import org.apache.flink.util.Preconditions;
 import org.apache.flink.yarn.cli.FlinkYarnSessionCli;
 import org.apache.hadoop.conf.Configuration;
@@ -109,7 +110,7 @@ public class YarnClusterClient extends ClusterClient {
 		final ApplicationReport appReport,
 		org.apache.flink.configuration.Configuration flinkConfig,
 		Path sessionFilesDir,
-		boolean newlyCreatedCluster) throws IOException, YarnException {
+		boolean newlyCreatedCluster) throws Exception {
 
 		super(flinkConfig);
 
@@ -123,7 +124,10 @@ public class YarnClusterClient extends ClusterClient {
 		this.trackingURL = appReport.getTrackingUrl();
 		this.newlyCreatedCluster = newlyCreatedCluster;
 
-		this.applicationClient = new LazApplicationClientLoader(flinkConfig, actorSystemLoader);
+		this.applicationClient = new LazApplicationClientLoader(
+			flinkConfig,
+			actorSystemLoader,
+			highAvailabilityServices);
 
 		this.pollingRunner = new PollingThread(yarnClient, appId);
 		this.pollingRunner.setDaemon(true);
@@ -443,7 +447,12 @@ public class YarnClusterClient extends ClusterClient {
 		@Override
 		public void run() {
 			LOG.info("Shutting down YarnClusterClient from the client shutdown hook");
-			shutdown();
+
+			try {
+				shutdown();
+			} catch (Throwable t) {
+				LOG.warn("Could not properly shut down the yarn cluster client.", t);
+			}
 		}
 	}
 
@@ -545,39 +554,46 @@ public class YarnClusterClient extends ClusterClient {
 
 		private final org.apache.flink.configuration.Configuration flinkConfig;
 		private final LazyActorSystemLoader actorSystemLoader;
+		private final HighAvailabilityServices highAvailabilityServices;
 
 		private ActorRef applicationClient;
 
 		private LazApplicationClientLoader(
 				org.apache.flink.configuration.Configuration flinkConfig,
-				LazyActorSystemLoader actorSystemLoader) {
-			this.flinkConfig = flinkConfig;
-			this.actorSystemLoader = actorSystemLoader;
+				LazyActorSystemLoader actorSystemLoader,
+				HighAvailabilityServices highAvailabilityServices) {
+			this.flinkConfig = Preconditions.checkNotNull(flinkConfig, "flinkConfig");
+			this.actorSystemLoader = Preconditions.checkNotNull(actorSystemLoader, "actorSystemLoader");
+			this.highAvailabilityServices = Preconditions.checkNotNull(highAvailabilityServices, "highAvailabilityServices");
 		}
 
 		/**
 		 * Creates a new ApplicationClient actor or returns an existing one. May start an ActorSystem.
 		 * @return ActorSystem
 		 */
-		public ActorRef get() {
+		public ActorRef get() throws FlinkException {
 			if (applicationClient == null) {
-				/* The leader retrieval service for connecting to the cluster and finding the active leader. */
-				LeaderRetrievalService leaderRetrievalService;
-				try {
-					leaderRetrievalService = LeaderRetrievalUtils.createLeaderRetrievalService(flinkConfig);
-				} catch (Exception e) {
-					throw new RuntimeException("Could not create the leader retrieval service.", e);
-				}
-
 				// start application client
 				LOG.info("Start application client.");
 
-				applicationClient = actorSystemLoader.get().actorOf(
-					Props.create(
-						ApplicationClient.class,
-						flinkConfig,
-						leaderRetrievalService),
-					"applicationClient");
+				final ActorSystem actorSystem;
+
+				try {
+					actorSystem = actorSystemLoader.get();
+				} catch (FlinkException fle) {
+					throw new FlinkException("Could not start the ClusterClient's ActorSystem.", fle);
+				}
+
+				try {
+					applicationClient = actorSystem.actorOf(
+						Props.create(
+							ApplicationClient.class,
+							flinkConfig,
+							highAvailabilityServices.getJobManagerLeaderRetriever(HighAvailabilityServices.DEFAULT_JOB_ID)),
+						"applicationClient");
+				} catch (Exception e) {
+					throw new FlinkException("Could not start the ApplicationClient.", e);
+				}
 			}
 
 			return applicationClient;

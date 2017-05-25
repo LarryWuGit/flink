@@ -25,12 +25,14 @@ import org.apache.flink.runtime.zookeeper.ZooKeeperSharedCount;
 import org.apache.flink.runtime.zookeeper.ZooKeeperSharedValue;
 import org.apache.flink.runtime.zookeeper.ZooKeeperStateHandleStore;
 import org.apache.flink.runtime.zookeeper.ZooKeeperVersionedValue;
+import org.apache.flink.util.FlinkException;
 import org.apache.mesos.Protos;
 import org.apache.zookeeper.KeeperException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import scala.Option;
 
+import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.ConcurrentModificationException;
@@ -88,7 +90,7 @@ public class ZooKeeperMesosWorkerStore implements MesosWorkerStore {
 				totalTaskCountInZooKeeper.close();
 
 				if(cleanup) {
-					workersInZooKeeper.removeAndDiscardAllState();
+					workersInZooKeeper.releaseAndTryRemoveAll();
 				}
 
 				isRunning = false;
@@ -169,20 +171,33 @@ public class ZooKeeperMesosWorkerStore implements MesosWorkerStore {
 		synchronized (startStopLock) {
 			verifyIsRunning();
 
-			List<Tuple2<RetrievableStateHandle<Worker>, String>> handles = workersInZooKeeper.getAll();
+			List<Tuple2<RetrievableStateHandle<Worker>, String>> handles = workersInZooKeeper.getAllAndLock();
 
-			if(handles.size() != 0) {
+			if (handles.isEmpty()) {
+				return Collections.emptyList();
+			}
+			else {
 				List<MesosWorkerStore.Worker> workers = new ArrayList<>(handles.size());
+
 				for (Tuple2<RetrievableStateHandle<Worker>, String> handle : handles) {
-					Worker worker = handle.f0.retrieveState();
+					final Worker worker;
+
+					try {
+						worker = handle.f0.retrieveState();
+					} catch (ClassNotFoundException cnfe) {
+						throw new FlinkException("Could not retrieve Mesos worker from state handle under " +
+							handle.f1 + ". This indicates that you are trying to recover from state written by an " +
+							"older Flink version which is not compatible. Try cleaning the state handle store.", cnfe);
+					} catch (IOException ioe) {
+						throw new FlinkException("Could not retrieve Mesos worker from state handle under " +
+							handle.f1 + ". This indicates that the retrieved state handle is broken. Try cleaning " +
+							"the state handle store.", ioe);
+					}
 
 					workers.add(worker);
 				}
 
 				return workers;
-			}
-			else {
-				return Collections.emptyList();
 			}
 		}
 	}
@@ -199,7 +214,7 @@ public class ZooKeeperMesosWorkerStore implements MesosWorkerStore {
 			int currentVersion = workersInZooKeeper.exists(path);
 			if (currentVersion == -1) {
 				try {
-					workersInZooKeeper.add(path, worker);
+					workersInZooKeeper.addAndLock(path, worker);
 					LOG.debug("Added {} in ZooKeeper.", worker);
 				} catch (KeeperException.NodeExistsException ex) {
 					throw new ConcurrentModificationException("ZooKeeper unexpectedly modified", ex);
@@ -227,7 +242,7 @@ public class ZooKeeperMesosWorkerStore implements MesosWorkerStore {
 				return false;
 			}
 
-			workersInZooKeeper.removeAndDiscardState(path);
+			workersInZooKeeper.releaseAndTryRemove(path);
 			LOG.debug("Removed worker {} from ZooKeeper.", taskID);
 			return true;
 		}

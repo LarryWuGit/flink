@@ -17,9 +17,6 @@
 
 package org.apache.flink.streaming.runtime.tasks;
 
-import java.util.concurrent.BlockingQueue;
-import java.util.concurrent.TimeUnit;
-
 import org.apache.flink.annotation.Internal;
 import org.apache.flink.streaming.api.operators.AbstractStreamOperator;
 import org.apache.flink.streaming.api.operators.OneInputStreamOperator;
@@ -29,9 +26,17 @@ import org.apache.flink.streaming.runtime.io.BlockingQueueBroker;
 import org.apache.flink.streaming.runtime.streamrecord.LatencyMarker;
 import org.apache.flink.streaming.runtime.streamrecord.StreamRecord;
 import org.apache.flink.util.OutputTag;
+
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.util.concurrent.BlockingQueue;
+import java.util.concurrent.TimeUnit;
+
+/**
+ * A special {@link StreamTask} that is used for executing feedback edges. This is used in
+ * combination with {@link StreamIterationHead}.
+ */
 @Internal
 public class StreamIterationTail<IN> extends OneInputStreamTask<IN, IN> {
 
@@ -66,7 +71,7 @@ public class StreamIterationTail<IN> extends OneInputStreamTask<IN, IN> {
 	}
 
 	private static class RecordPusher<IN> extends AbstractStreamOperator<IN> implements OneInputStreamOperator<IN, IN> {
-		
+
 		private static final long serialVersionUID = 1L;
 
 		@Override
@@ -89,9 +94,9 @@ public class StreamIterationTail<IN> extends OneInputStreamTask<IN, IN> {
 
 		@SuppressWarnings("NonSerializableFieldInSerializableClass")
 		private final BlockingQueue<StreamRecord<IN>> dataChannel;
-		
+
 		private final long iterationWaitTime;
-		
+
 		private final boolean shouldWait;
 
 		IterationTailOutput(BlockingQueue<StreamRecord<IN>> dataChannel, long iterationWaitTime) {

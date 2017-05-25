@@ -15,16 +15,13 @@
 * See the License for the specific language governing permissions and
 * limitations under the License.
 */
-package org.apache.flink.streaming.runtime.operators.windowing;
 
-import com.google.common.base.Function;
-import com.google.common.collect.FluentIterable;
-import com.google.common.collect.Iterables;
+package org.apache.flink.streaming.runtime.operators.windowing;
 
 import org.apache.flink.annotation.Internal;
 import org.apache.flink.annotation.VisibleForTesting;
-import org.apache.flink.api.common.state.ListState;
 import org.apache.flink.api.common.state.AppendingState;
+import org.apache.flink.api.common.state.ListState;
 import org.apache.flink.api.common.state.StateDescriptor;
 import org.apache.flink.api.common.typeutils.TypeSerializer;
 import org.apache.flink.api.java.functions.KeySelector;
@@ -41,6 +38,10 @@ import org.apache.flink.streaming.runtime.operators.windowing.functions.Internal
 import org.apache.flink.streaming.runtime.streamrecord.StreamRecord;
 import org.apache.flink.util.OutputTag;
 
+import com.google.common.base.Function;
+import com.google.common.collect.FluentIterable;
+import com.google.common.collect.Iterables;
+
 import java.util.Collection;
 
 import static org.apache.flink.util.Preconditions.checkNotNull;
@@ -48,9 +49,9 @@ import static org.apache.flink.util.Preconditions.checkNotNull;
 /**
  * A {@link WindowOperator} that also allows an {@link Evictor} to be used.
  *
- * <p>
- * The {@code Evictor} is used to remove elements from a pane before/after the evaluation of WindowFunction and
- * after the window evaluation gets triggered by a {@link org.apache.flink.streaming.api.windowing.triggers.Trigger}.
+ * <p>The {@code Evictor} is used to remove elements from a pane before/after the evaluation of
+ * {@link InternalWindowFunction} and after the window evaluation gets triggered by a
+ * {@link org.apache.flink.streaming.api.windowing.triggers.Trigger}.
  *
  * @param <K> The type of key returned by the {@code KeySelector}.
  * @param <IN> The type of the incoming elements.
@@ -352,11 +353,10 @@ public class EvictingWindowOperator<K, IN, OUT, W extends Window>
 		userFunction.process(triggerContext.key, triggerContext.window, processContext, projectedContents, timestampedCollector);
 		evictorContext.evictAfter(recordsWithTimestamp, Iterables.size(recordsWithTimestamp));
 
-
 		//work around to fix FLINK-4369, remove the evicted elements from the windowState.
 		//this is inefficient, but there is no other way to remove elements from ListState, which is an AppendingState.
 		windowState.clear();
-		for(TimestampedValue<IN> record : recordsWithTimestamp) {
+		for (TimestampedValue<IN> record : recordsWithTimestamp) {
 			windowState.add(record.getStreamRecord());
 		}
 	}
@@ -406,17 +406,16 @@ public class EvictingWindowOperator<K, IN, OUT, W extends Window>
 			return EvictingWindowOperator.this.getMetricGroup();
 		}
 
-
 		public K getKey() {
 			return key;
 		}
 
 		void evictBefore(Iterable<TimestampedValue<IN>> elements, int size) {
-			evictor.evictBefore((Iterable)elements, size, window, this);
+			evictor.evictBefore((Iterable) elements, size, window, this);
 		}
 
 		void evictAfter(Iterable<TimestampedValue<IN>>  elements, int size) {
-			evictor.evictAfter((Iterable)elements, size, window, this);
+			evictor.evictAfter((Iterable) elements, size, window, this);
 		}
 	}
 
@@ -424,7 +423,7 @@ public class EvictingWindowOperator<K, IN, OUT, W extends Window>
 	public void open() throws Exception {
 		super.open();
 
-		evictorContext = new EvictorContext(null,null);
+		evictorContext = new EvictorContext(null, null);
 		evictingWindowState = (InternalListState<W, StreamRecord<IN>>)
 				getOrCreateKeyedState(windowSerializer, evictingWindowStateDescriptor);
 	}

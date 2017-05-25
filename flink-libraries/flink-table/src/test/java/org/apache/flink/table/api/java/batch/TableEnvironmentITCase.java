@@ -28,6 +28,7 @@ import org.apache.flink.api.common.typeinfo.TypeInformation;
 import org.apache.calcite.tools.RuleSets;
 import org.apache.flink.api.java.DataSet;
 import org.apache.flink.api.java.ExecutionEnvironment;
+import org.apache.flink.api.java.typeutils.GenericTypeInfo;
 import org.apache.flink.table.api.java.BatchTableEnvironment;
 import org.apache.flink.api.java.tuple.Tuple3;
 import org.apache.flink.api.java.tuple.Tuple4;
@@ -42,9 +43,12 @@ import org.apache.flink.table.api.Table;
 import org.apache.flink.table.api.TableEnvironment;
 import org.apache.flink.table.api.TableException;
 import org.apache.flink.test.javaApiOperators.util.CollectionDataSets;
+import org.junit.Ignore;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.junit.runners.Parameterized;
+
+import static org.junit.Assert.assertTrue;
 
 @RunWith(Parameterized.class)
 public class TableEnvironmentITCase extends TableProgramsCollectionTestBase {
@@ -214,6 +218,7 @@ public class TableEnvironmentITCase extends TableProgramsCollectionTestBase {
 		compareResultAsText(results, expected);
 	}
 
+	@Ignore
 	@Test
 	public void testAsFromTupleToPojo() throws Exception {
 		ExecutionEnvironment env = ExecutionEnvironment.getExecutionEnvironment();
@@ -240,24 +245,25 @@ public class TableEnvironmentITCase extends TableProgramsCollectionTestBase {
 		BatchTableEnvironment tableEnv = TableEnvironment.getTableEnvironment(env, config());
 
 		List<SmallPojo> data = new ArrayList<>();
-		data.add(new SmallPojo("Peter", 28, 4000.00, "Sales"));
-		data.add(new SmallPojo("Anna", 56, 10000.00, "Engineering"));
-		data.add(new SmallPojo("Lucy", 42, 6000.00, "HR"));
+		data.add(new SmallPojo("Peter", 28, 4000.00, "Sales", new Integer[] {42}));
+		data.add(new SmallPojo("Anna", 56, 10000.00, "Engineering", new Integer[] {}));
+		data.add(new SmallPojo("Lucy", 42, 6000.00, "HR", new Integer[] {1, 2, 3}));
 
 		Table table = tableEnv
 			.fromDataSet(env.fromCollection(data),
 				"department AS a, " +
 				"age AS b, " +
 				"salary AS c, " +
-				"name AS d")
-			.select("a, b, c, d");
+				"name AS d," +
+				"roles as e")
+			.select("a, b, c, d, e");
 
 		DataSet<Row> ds = tableEnv.toDataSet(table, Row.class);
 		List<Row> results = ds.collect();
 		String expected =
-			"Sales,28,4000.0,Peter\n" +
-			"Engineering,56,10000.0,Anna\n" +
-			"HR,42,6000.0,Lucy\n";
+			"Sales,28,4000.0,Peter,[42]\n" +
+			"Engineering,56,10000.0,Anna,[]\n" +
+			"HR,42,6000.0,Lucy,[1, 2, 3]\n";
 		compareResultAsText(results, expected);
 	}
 
@@ -294,24 +300,25 @@ public class TableEnvironmentITCase extends TableProgramsCollectionTestBase {
 		BatchTableEnvironment tableEnv = TableEnvironment.getTableEnvironment(env, config());
 
 		List<SmallPojo> data = new ArrayList<>();
-		data.add(new SmallPojo("Peter", 28, 4000.00, "Sales"));
-		data.add(new SmallPojo("Anna", 56, 10000.00, "Engineering"));
-		data.add(new SmallPojo("Lucy", 42, 6000.00, "HR"));
+		data.add(new SmallPojo("Peter", 28, 4000.00, "Sales", new Integer[] {42}));
+		data.add(new SmallPojo("Anna", 56, 10000.00, "Engineering", new Integer[] {}));
+		data.add(new SmallPojo("Lucy", 42, 6000.00, "HR", new Integer[] {1, 2, 3}));
 
 		Table table = tableEnv
 			.fromDataSet(env.fromCollection(data),
 				"department AS a, " +
 				"age AS b, " +
 				"salary AS c, " +
-				"name AS d")
-			.select("a, b, c, d");
+				"name AS d," +
+				"roles AS e")
+			.select("a, b, c, d, e");
 
 		DataSet<SmallPojo2> ds = tableEnv.toDataSet(table, SmallPojo2.class);
 		List<SmallPojo2> results = ds.collect();
 		String expected =
-			"Sales,28,4000.0,Peter\n" +
-			"Engineering,56,10000.0,Anna\n" +
-			"HR,42,6000.0,Lucy\n";
+			"Sales,28,4000.0,Peter,[42]\n" +
+			"Engineering,56,10000.0,Anna,[]\n" +
+			"HR,42,6000.0,Lucy,[1, 2, 3]\n";
 		compareResultAsText(results, expected);
 	}
 
@@ -375,12 +382,31 @@ public class TableEnvironmentITCase extends TableProgramsCollectionTestBase {
 	}
 
 	@Test(expected = TableException.class)
-	public void testAsWithToFewFields() throws Exception {
+	public void testGenericRow() throws Exception {
 		ExecutionEnvironment env = ExecutionEnvironment.getExecutionEnvironment();
 		BatchTableEnvironment tableEnv = TableEnvironment.getTableEnvironment(env, config());
 
-		// Must fail. Not enough field names specified.
-		tableEnv.fromDataSet(CollectionDataSets.get3TupleDataSet(env), "a, b");
+		// use null value the enforce GenericType
+		DataSet<Row> dataSet = env.fromElements(Row.of(1, 2L, "Hello", null));
+		assertTrue(dataSet.getType() instanceof GenericTypeInfo);
+		assertTrue(dataSet.getType().getTypeClass().equals(Row.class));
+
+		// Must fail. Cannot import DataSet<Row> with GenericTypeInfo.
+		tableEnv.fromDataSet(dataSet);
+	}
+
+	@Test(expected = TableException.class)
+	public void testGenericRowWithAlias() throws Exception {
+		ExecutionEnvironment env = ExecutionEnvironment.getExecutionEnvironment();
+		BatchTableEnvironment tableEnv = TableEnvironment.getTableEnvironment(env, config());
+
+		// use null value the enforce GenericType
+		DataSet<Row> dataSet = env.fromElements(Row.of((Integer)null));
+		assertTrue(dataSet.getType() instanceof GenericTypeInfo);
+		assertTrue(dataSet.getType().getTypeClass().equals(Row.class));
+
+		// Must fail. Cannot import DataSet<Row> with GenericTypeInfo.
+		tableEnv.fromDataSet(dataSet, "nullField");
 	}
 
 	@Test(expected = TableException.class)
@@ -443,7 +469,10 @@ public class TableEnvironmentITCase extends TableProgramsCollectionTestBase {
 		ExecutionEnvironment env = ExecutionEnvironment.getExecutionEnvironment();
 		BatchTableEnvironment tableEnv = TableEnvironment.getTableEnvironment(env, config());
 
-		CalciteConfig cc = new CalciteConfigBuilder().replaceOptRuleSet(RuleSets.ofList()).build();
+		CalciteConfig cc = new CalciteConfigBuilder()
+				.replaceLogicalOptRuleSet(RuleSets.ofList())
+				.replacePhysicalOptRuleSet(RuleSets.ofList())
+				.build();
 		tableEnv.getConfig().setCalciteConfig(cc);
 
 		DataSet<Tuple3<Integer, Long, String>> ds = CollectionDataSets.get3TupleDataSet(env);
@@ -462,17 +491,19 @@ public class TableEnvironmentITCase extends TableProgramsCollectionTestBase {
 
 		public SmallPojo() { }
 
-		public SmallPojo(String name, int age, double salary, String department) {
+		public SmallPojo(String name, int age, double salary, String department, Integer[] roles) {
 			this.name = name;
 			this.age = age;
 			this.salary = salary;
 			this.department = department;
+			this.roles = roles;
 		}
 
 		public String name;
 		public int age;
 		public double salary;
 		public String department;
+		public Integer[] roles;
 	}
 
 	@SuppressWarnings("unused")
@@ -555,21 +586,23 @@ public class TableEnvironmentITCase extends TableProgramsCollectionTestBase {
 
 		public SmallPojo2() { }
 
-		public SmallPojo2(String a, int b, double c, String d) {
+		public SmallPojo2(String a, int b, double c, String d, Integer[] e) {
 			this.a = a;
 			this.b = b;
 			this.c = c;
 			this.d = d;
+			this.e = e;
 		}
 
 		public String a;
 		public int b;
 		public double c;
 		public String d;
+		public Integer[] e;
 
 		@Override
 		public String toString() {
-			return a + "," + b + "," + c + "," + d;
+			return a + "," + b + "," + c + "," + d + "," + Arrays.toString(e);
 		}
 	}
 

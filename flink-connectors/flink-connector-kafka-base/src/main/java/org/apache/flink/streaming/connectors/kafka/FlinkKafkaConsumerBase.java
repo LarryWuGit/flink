@@ -516,7 +516,8 @@ public abstract class FlinkKafkaConsumerBase<T> extends RichParallelSourceFuncti
 				if (LOG.isDebugEnabled()) {
 					LOG.debug("Using the following offsets: {}", restoredState);
 				}
-			} else if (restoredState.isEmpty()) {
+			}
+			if (restoredState != null && restoredState.isEmpty()) {
 				restoredState = null;
 			}
 		} else {
@@ -767,5 +768,10 @@ public abstract class FlinkKafkaConsumerBase<T> extends RichParallelSourceFuncti
 	@VisibleForTesting
 	HashMap<KafkaTopicPartition, Long> getRestoredState() {
 		return restoredState;
+	}
+
+	@VisibleForTesting
+	OffsetCommitMode getOffsetCommitMode() {
+		return offsetCommitMode;
 	}
 }

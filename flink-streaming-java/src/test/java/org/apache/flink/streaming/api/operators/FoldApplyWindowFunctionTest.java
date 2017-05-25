@@ -37,12 +37,16 @@ import org.apache.flink.streaming.api.windowing.windows.TimeWindow;
 import org.apache.flink.streaming.runtime.operators.windowing.AccumulatingProcessingTimeWindowOperator;
 import org.apache.flink.streaming.runtime.operators.windowing.functions.InternalIterableWindowFunction;
 import org.apache.flink.util.Collector;
-import org.junit.Test;
+
 import org.junit.Assert;
+import org.junit.Test;
 
 import java.util.ArrayList;
 import java.util.List;
 
+/**
+ * Tests for {@link FoldApplyWindowFunction}.
+ */
 public class FoldApplyWindowFunctionTest {
 
 	/**
@@ -117,7 +121,7 @@ public class FoldApplyWindowFunctionTest {
 
 		transformations.add(new OneInputTransformation<>(source, "test", windowOperator, BasicTypeInfo.INT_TYPE_INFO, 1));
 
-		StreamGraph streamGraph = StreamGraphGenerator.generate(env, transformations, 1 /* default parallelism */);
+		StreamGraph streamGraph = StreamGraphGenerator.generate(env, transformations);
 
 		List<Integer> result = new ArrayList<>();
 		List<Integer> input = new ArrayList<>();
@@ -138,11 +142,7 @@ public class FoldApplyWindowFunctionTest {
 		Assert.assertEquals(expected, result);
 	}
 
-	public static class DummyStreamExecutionEnvironment extends StreamExecutionEnvironment {
-
-		public DummyStreamExecutionEnvironment() {
-			super(1);
-		}
+	private static class DummyStreamExecutionEnvironment extends StreamExecutionEnvironment {
 
 		@Override
 		public JobExecutionResult execute(String jobName) throws Exception {

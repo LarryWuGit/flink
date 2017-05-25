@@ -18,6 +18,7 @@
 package org.apache.flink.streaming.connectors.fs.bucketing;
 
 import org.apache.commons.lang3.time.StopWatch;
+import org.apache.flink.annotation.VisibleForTesting;
 import org.apache.flink.api.common.ExecutionConfig;
 import org.apache.flink.api.common.state.ListState;
 import org.apache.flink.api.common.state.OperatorStateStore;
@@ -723,9 +724,7 @@ public class BucketingSink<T>
 
 			handlePendingFilesForPreviousCheckpoints(bucketState.pendingFilesPerCheckpoint);
 
-			synchronized (bucketState.pendingFilesPerCheckpoint) {
-				bucketState.pendingFilesPerCheckpoint.clear();
-			}
+			bucketState.pendingFilesPerCheckpoint.clear();
 		}
 	}
 
@@ -740,9 +739,7 @@ public class BucketingSink<T>
 
 		handlePendingFilesForPreviousCheckpoints(restoredState.pendingFilesPerCheckpoint);
 
-		synchronized (restoredState.pendingFilesPerCheckpoint) {
-			restoredState.pendingFilesPerCheckpoint.clear();
-		}
+		restoredState.pendingFilesPerCheckpoint.clear();
 	}
 
 	private void handlePendingInProgressFile(String file, long validLength) {
@@ -1031,6 +1028,11 @@ public class BucketingSink<T>
 	public BucketingSink<T> setAsyncTimeout(long timeout) {
 		this.asyncTimeout = timeout;
 		return this;
+	}
+
+	@VisibleForTesting
+	public State<T> getState() {
+		return state;
 	}
 
 	// --------------------------------------------------------------------------------------------

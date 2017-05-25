@@ -18,7 +18,14 @@
 
 package org.apache.flink.migration.streaming.runtime.streamrecord;
 
+import org.apache.flink.api.common.typeutils.CompatibilityResult;
+import org.apache.flink.api.common.typeutils.CompatibilityUtil;
+import org.apache.flink.api.common.typeutils.CompositeTypeSerializerConfigSnapshot;
+import org.apache.flink.api.common.typeutils.TypeDeserializerAdapter;
 import org.apache.flink.api.common.typeutils.TypeSerializer;
+import org.apache.flink.api.common.typeutils.TypeSerializerConfigSnapshot;
+import org.apache.flink.api.common.typeutils.UnloadableDummyTypeSerializer;
+import org.apache.flink.api.java.tuple.Tuple2;
 import org.apache.flink.core.memory.DataInputView;
 import org.apache.flink.core.memory.DataOutputView;
 import org.apache.flink.streaming.api.watermark.Watermark;
@@ -29,6 +36,10 @@ import java.io.IOException;
 
 import static java.util.Objects.requireNonNull;
 
+/**
+ * Legacy multiplexing {@link TypeSerializer} for stream records, watermarks and other stream
+ * elements.
+ */
 public class MultiplexingStreamRecordSerializer<T> extends TypeSerializer<StreamElement> {
 
 
@@ -40,7 +51,6 @@ public class MultiplexingStreamRecordSerializer<T> extends TypeSerializer<Stream
 
 
 	private final TypeSerializer<T> typeSerializer;
-
 
 	public MultiplexingStreamRecordSerializer(TypeSerializer<T> serializer) {
 		if (serializer instanceof MultiplexingStreamRecordSerializer || serializer instanceof StreamRecordSerializer) {
@@ -199,6 +209,60 @@ public class MultiplexingStreamRecordSerializer<T> extends TypeSerializer<Stream
 		}
 		else {
 			throw new IOException("Corrupt stream, found tag: " + tag);
+		}
+	}
+
+	// --------------------------------------------------------------------------------------------
+	// Serializer configuration snapshotting & compatibility
+	// --------------------------------------------------------------------------------------------
+
+	@Override
+	public MultiplexingStreamRecordSerializerConfigSnapshot snapshotConfiguration() {
+		return new MultiplexingStreamRecordSerializerConfigSnapshot<>(typeSerializer);
+	}
+
+	@Override
+	public CompatibilityResult<StreamElement> ensureCompatibility(TypeSerializerConfigSnapshot configSnapshot) {
+		if (configSnapshot instanceof MultiplexingStreamRecordSerializerConfigSnapshot) {
+			Tuple2<TypeSerializer<?>, TypeSerializerConfigSnapshot> previousTypeSerializerAndConfig =
+				((MultiplexingStreamRecordSerializerConfigSnapshot) configSnapshot).getSingleNestedSerializerAndConfig();
+
+			CompatibilityResult<T> compatResult = CompatibilityUtil.resolveCompatibilityResult(
+					previousTypeSerializerAndConfig.f0,
+					UnloadableDummyTypeSerializer.class,
+					previousTypeSerializerAndConfig.f1,
+					typeSerializer);
+
+			if (!compatResult.isRequiresMigration()) {
+				return CompatibilityResult.compatible();
+			} else if (compatResult.getConvertDeserializer() != null) {
+				return CompatibilityResult.requiresMigration(
+					new MultiplexingStreamRecordSerializer<>(
+						new TypeDeserializerAdapter<>(compatResult.getConvertDeserializer())));
+			}
+		}
+
+		return CompatibilityResult.requiresMigration();
+	}
+
+	/**
+	 * Configuration snapshot specific to the {@link MultiplexingStreamRecordSerializer}.
+	 */
+	public static final class MultiplexingStreamRecordSerializerConfigSnapshot<T>
+			extends CompositeTypeSerializerConfigSnapshot {
+
+		private static final int VERSION = 1;
+
+		/** This empty nullary constructor is required for deserializing the configuration. */
+		public MultiplexingStreamRecordSerializerConfigSnapshot() {}
+
+		public MultiplexingStreamRecordSerializerConfigSnapshot(TypeSerializer<T> typeSerializer) {
+			super(typeSerializer);
+		}
+
+		@Override
+		public int getVersion() {
+			return VERSION;
 		}
 	}
 
