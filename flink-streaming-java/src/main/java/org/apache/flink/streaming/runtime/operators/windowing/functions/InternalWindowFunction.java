@@ -15,6 +15,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 package org.apache.flink.streaming.runtime.operators.windowing.functions;
 
 import org.apache.flink.api.common.functions.Function;
@@ -49,7 +50,16 @@ public interface InternalWindowFunction<IN, OUT, KEY, W extends Window> extends 
 	 */
 	void clear(W window, InternalWindowContext context) throws Exception;
 
+	/**
+	 * A context for {@link InternalWindowFunction}, similar to
+	 * {@link org.apache.flink.streaming.api.functions.windowing.ProcessWindowFunction.Context} but
+	 * for internal use.
+	 */
 	interface InternalWindowContext extends java.io.Serializable {
+		long currentProcessingTime();
+
+		long currentWatermark();
+
 		KeyedStateStore windowState();
 
 		KeyedStateStore globalState();

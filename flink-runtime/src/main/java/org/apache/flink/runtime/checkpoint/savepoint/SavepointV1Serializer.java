@@ -18,6 +18,8 @@
 
 package org.apache.flink.runtime.checkpoint.savepoint;
 
+import org.apache.flink.annotation.Internal;
+import org.apache.flink.annotation.VisibleForTesting;
 import org.apache.flink.core.fs.Path;
 import org.apache.flink.runtime.checkpoint.SubtaskState;
 import org.apache.flink.runtime.checkpoint.TaskState;
@@ -42,13 +44,14 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * Serializer for {@link SavepointV1} instances.
- * <p>
- * <p>In contrast to previous savepoint versions, this serializer makes sure
- * that no default Java serialization is used for serialization. Therefore, we
- * don't rely on any involved Java classes to stay the same.
+ * Deserializer for checkpoints written in format {@code 1} (Flink 1.2.x format)
+ *
+ * <p>In contrast to the previous versions, this serializer makes sure that no Java
+ * serialization is used for serialization. Therefore, we don't rely on any involved
+ * classes to stay the same.
  */
-class SavepointV1Serializer implements SavepointSerializer<SavepointV1> {
+@Internal
+public class SavepointV1Serializer implements SavepointSerializer<SavepointV2> {
 
 	private static final byte NULL_HANDLE = 0;
 	private static final byte BYTE_STREAM_STATE_HANDLE = 1;
@@ -63,39 +66,12 @@ class SavepointV1Serializer implements SavepointSerializer<SavepointV1> {
 	}
 
 	@Override
-	public void serialize(SavepointV1 savepoint, DataOutputStream dos) throws IOException {
-		try {
-			dos.writeLong(savepoint.getCheckpointId());
-
-			Collection<TaskState> taskStates = savepoint.getTaskStates();
-			dos.writeInt(taskStates.size());
-
-			for (TaskState taskState : savepoint.getTaskStates()) {
-				// Vertex ID
-				dos.writeLong(taskState.getJobVertexID().getLowerPart());
-				dos.writeLong(taskState.getJobVertexID().getUpperPart());
-
-				// Parallelism
-				int parallelism = taskState.getParallelism();
-				dos.writeInt(parallelism);
-				dos.writeInt(taskState.getMaxParallelism());
-				dos.writeInt(taskState.getChainLength());
-
-				// Sub task states
-				Map<Integer, SubtaskState> subtaskStateMap = taskState.getSubtaskStates();
-				dos.writeInt(subtaskStateMap.size());
-				for (Map.Entry<Integer, SubtaskState> entry : subtaskStateMap.entrySet()) {
-					dos.writeInt(entry.getKey());
-					serializeSubtaskState(entry.getValue(), dos);
-				}
-			}
-		} catch (Exception e) {
-			throw new IOException(e);
-		}
+	public void serialize(SavepointV2 savepoint, DataOutputStream dos) throws IOException {
+		throw new UnsupportedOperationException("This serializer is read-only and only exists for backwards compatibility");
 	}
 
 	@Override
-	public SavepointV1 deserialize(DataInputStream dis, ClassLoader cl) throws IOException {
+	public SavepointV2 deserialize(DataInputStream dis, ClassLoader cl) throws IOException {
 		long checkpointId = dis.readLong();
 
 		// Task states
@@ -122,7 +98,34 @@ class SavepointV1Serializer implements SavepointSerializer<SavepointV1> {
 			}
 		}
 
-		return new SavepointV1(checkpointId, taskStates);
+		return new SavepointV2(checkpointId, taskStates);
+	}
+
+	public void serializeOld(SavepointV1 savepoint, DataOutputStream dos) throws IOException {
+		dos.writeLong(savepoint.getCheckpointId());
+
+		Collection<TaskState> taskStates = savepoint.getTaskStates();
+		dos.writeInt(taskStates.size());
+
+		for (TaskState taskState : savepoint.getTaskStates()) {
+			// Vertex ID
+			dos.writeLong(taskState.getJobVertexID().getLowerPart());
+			dos.writeLong(taskState.getJobVertexID().getUpperPart());
+
+			// Parallelism
+			int parallelism = taskState.getParallelism();
+			dos.writeInt(parallelism);
+			dos.writeInt(taskState.getMaxParallelism());
+			dos.writeInt(taskState.getChainLength());
+
+			// Sub task states
+			Map<Integer, SubtaskState> subtaskStateMap = taskState.getSubtaskStates();
+			dos.writeInt(subtaskStateMap.size());
+			for (Map.Entry<Integer, SubtaskState> entry : subtaskStateMap.entrySet()) {
+				dos.writeInt(entry.getKey());
+				serializeSubtaskState(entry.getValue(), dos);
+			}
+		}
 	}
 
 	private static void serializeSubtaskState(SubtaskState subtaskState, DataOutputStream dos) throws IOException {
@@ -210,7 +213,8 @@ class SavepointV1Serializer implements SavepointSerializer<SavepointV1> {
 				keyedStateStream);
 	}
 
-	private static void serializeKeyedStateHandle(
+	@VisibleForTesting
+	public static void serializeKeyedStateHandle(
 			KeyedStateHandle stateHandle, DataOutputStream dos) throws IOException {
 
 		if (stateHandle == null) {
@@ -230,7 +234,8 @@ class SavepointV1Serializer implements SavepointSerializer<SavepointV1> {
 		}
 	}
 
-	private static KeyedStateHandle deserializeKeyedStateHandle(DataInputStream dis) throws IOException {
+	@VisibleForTesting
+	public static KeyedStateHandle deserializeKeyedStateHandle(DataInputStream dis) throws IOException {
 		final int type = dis.readByte();
 		if (NULL_HANDLE == type) {
 			return null;
@@ -251,7 +256,8 @@ class SavepointV1Serializer implements SavepointSerializer<SavepointV1> {
 		}
 	}
 
-	private static void serializeOperatorStateHandle(
+	@VisibleForTesting
+	public static void serializeOperatorStateHandle(
 			OperatorStateHandle stateHandle, DataOutputStream dos) throws IOException {
 
 		if (stateHandle != null) {
@@ -279,7 +285,8 @@ class SavepointV1Serializer implements SavepointSerializer<SavepointV1> {
 		}
 	}
 
-	private static OperatorStateHandle deserializeOperatorStateHandle(
+	@VisibleForTesting
+	public static OperatorStateHandle deserializeOperatorStateHandle(
 			DataInputStream dis) throws IOException {
 
 		final int type = dis.readByte();
@@ -310,7 +317,8 @@ class SavepointV1Serializer implements SavepointSerializer<SavepointV1> {
 		}
 	}
 
-	private static void serializeStreamStateHandle(
+	@VisibleForTesting
+	public static void serializeStreamStateHandle(
 			StreamStateHandle stateHandle, DataOutputStream dos) throws IOException {
 
 		if (stateHandle == null) {
@@ -337,7 +345,8 @@ class SavepointV1Serializer implements SavepointSerializer<SavepointV1> {
 		dos.flush();
 	}
 
-	private static StreamStateHandle deserializeStreamStateHandle(DataInputStream dis) throws IOException {
+	@VisibleForTesting
+	public static StreamStateHandle deserializeStreamStateHandle(DataInputStream dis) throws IOException {
 		int type = dis.read();
 		if (NULL_HANDLE == type) {
 			return null;

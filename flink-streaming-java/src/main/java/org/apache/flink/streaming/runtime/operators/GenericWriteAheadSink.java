@@ -15,6 +15,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 package org.apache.flink.streaming.runtime.operators;
 
 import org.apache.flink.api.common.state.ListState;
@@ -32,6 +33,7 @@ import org.apache.flink.streaming.api.operators.AbstractStreamOperator;
 import org.apache.flink.streaming.api.operators.OneInputStreamOperator;
 import org.apache.flink.streaming.runtime.streamrecord.StreamRecord;
 import org.apache.flink.util.Preconditions;
+
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -228,6 +230,7 @@ public abstract class GenericWriteAheadSink<IN> extends AbstractStreamOperator<I
 																in),
 														serializer),
 												serializer),
+										checkpointId,
 										timestamp);
 								if (success) {
 									// in case the checkpoint was successfully committed,
@@ -256,11 +259,15 @@ public abstract class GenericWriteAheadSink<IN> extends AbstractStreamOperator<I
 	/**
 	 * Write the given element into the backend.
 	 *
-	 * @param value value to be written
+	 * @param values The values to be written
+	 * @param checkpointId The checkpoint ID of the checkpoint to be written
+	 * @param timestamp The wall-clock timestamp of the checkpoint
+	 *
 	 * @return true, if the sending was successful, false otherwise
+	 *
 	 * @throws Exception
 	 */
-	protected abstract boolean sendValues(Iterable<IN> value, long timestamp) throws Exception;
+	protected abstract boolean sendValues(Iterable<IN> values, long checkpointId, long timestamp) throws Exception;
 
 	@Override
 	public void processElement(StreamRecord<IN> element) throws Exception {

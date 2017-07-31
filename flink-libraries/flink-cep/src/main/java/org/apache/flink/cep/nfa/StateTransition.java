@@ -25,6 +25,11 @@ import org.apache.flink.cep.pattern.conditions.SimpleCondition;
 import java.io.Serializable;
 import java.util.Objects;
 
+/**
+ * Represents a transition from one {@link State} to another.
+ *
+ * @param <T> type of events that are handled by the {@link IterativeCondition}
+ */
 public class StateTransition<T> implements Serializable {
 	private static final long serialVersionUID = -4825345749997891838L;
 
@@ -93,20 +98,13 @@ public class StateTransition<T> implements Serializable {
 
 	@Override
 	public String toString() {
-		StringBuilder builder = new StringBuilder();
-
-		builder.append("StateTransition(")
-			.append(action).append(", ")
-			.append(sourceState.getName()).append(", ")
-			.append(targetState.getName());
-
-		if (newCondition != null) {
-			builder.append(", with filter)");
-		} else {
-			builder.append(")");
-		}
-
-		return builder.toString();
+		return new StringBuilder()
+				.append("StateTransition(")
+				.append(action).append(", ")
+				.append("from ").append(sourceState.getName())
+				.append("to ").append(targetState.getName())
+				.append(newCondition != null ? ", with condition)" : ")")
+				.toString();
 	}
 
 	/**

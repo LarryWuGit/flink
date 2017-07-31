@@ -38,11 +38,7 @@ public class LegacyCheckpointedStreamingProgram {
 	private static final int CHECKPOINT_INTERVALL = 100;
 
 	public static void main(String[] args) throws Exception {
-		final String jarFile = args[0];
-		final String host = args[1];
-		final int port = Integer.parseInt(args[2]);
-
-		StreamExecutionEnvironment env = StreamExecutionEnvironment.createRemoteEnvironment(host, port, jarFile);
+		StreamExecutionEnvironment env = StreamExecutionEnvironment.getExecutionEnvironment();
 		env.getConfig().disableSysoutLogging();
 		env.enableCheckpointing(CHECKPOINT_INTERVALL);
 		env.setRestartStrategy(RestartStrategies.fixedDelayRestart(1, 10000));
@@ -54,9 +50,8 @@ public class LegacyCheckpointedStreamingProgram {
 		env.execute("Checkpointed Streaming Program");
 	}
 
-
 	// with Checkpointing
-	public static class SimpleStringGenerator implements SourceFunction<String>, Checkpointed<Integer> {
+	private static class SimpleStringGenerator implements SourceFunction<String>, Checkpointed<Integer> {
 
 		private static final long serialVersionUID = 3700033137820808611L;
 
@@ -64,7 +59,7 @@ public class LegacyCheckpointedStreamingProgram {
 
 		@Override
 		public void run(SourceContext<String> ctx) throws Exception {
-			while(running) {
+			while (running) {
 				Thread.sleep(1);
 				ctx.collect("someString");
 			}
@@ -86,7 +81,7 @@ public class LegacyCheckpointedStreamingProgram {
 		}
 	}
 
-	public static class StatefulMapper implements MapFunction<String, String>, Checkpointed<StatefulMapper>, CheckpointListener {
+	private static class StatefulMapper implements MapFunction<String, String>, Checkpointed<StatefulMapper>, CheckpointListener {
 
 		private static final long serialVersionUID = 2703630582894634440L;
 
@@ -108,14 +103,14 @@ public class LegacyCheckpointedStreamingProgram {
 
 		@Override
 		public String map(String value) throws Exception {
-			if(!atLeastOneSnapshotComplete) {
+			if (!atLeastOneSnapshotComplete) {
 				// throttle consumption by the checkpoint interval until we have one snapshot.
 				Thread.sleep(CHECKPOINT_INTERVALL);
 			}
-			if(atLeastOneSnapshotComplete && !restored) {
+			if (atLeastOneSnapshotComplete && !restored) {
 				throw new RuntimeException("Intended failure, to trigger restore");
 			}
-			if(restored) {
+			if (restored) {
 				throw new SuccessException();
 				//throw new RuntimeException("All good");
 			}
@@ -131,14 +126,14 @@ public class LegacyCheckpointedStreamingProgram {
 	// --------------------------------------------------------------------------------------------
 
 	/**
-	 * We intentionally use a user specified failure exception
+	 * We intentionally use a user specified failure exception.
 	 */
-	public static class SuccessException extends Exception {
+	private static class SuccessException extends Exception {
 
 		private static final long serialVersionUID = 7073311460437532086L;
 	}
 
-	public static class NoOpSink implements SinkFunction<String> {
+	private static class NoOpSink implements SinkFunction<String> {
 		private static final long serialVersionUID = 2381410324190818620L;
 
 		@Override

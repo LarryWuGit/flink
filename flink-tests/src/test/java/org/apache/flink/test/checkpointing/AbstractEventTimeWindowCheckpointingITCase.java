@@ -29,6 +29,7 @@ import org.apache.flink.configuration.ConfigConstants;
 import org.apache.flink.configuration.Configuration;
 import org.apache.flink.configuration.TaskManagerOptions;
 import org.apache.flink.contrib.streaming.state.RocksDBStateBackend;
+import org.apache.flink.core.fs.Path;
 import org.apache.flink.runtime.minicluster.LocalFlinkMiniCluster;
 import org.apache.flink.runtime.state.AbstractStateBackend;
 import org.apache.flink.runtime.state.CheckpointListener;
@@ -36,16 +37,17 @@ import org.apache.flink.runtime.state.filesystem.FsStateBackend;
 import org.apache.flink.runtime.state.memory.MemoryStateBackend;
 import org.apache.flink.streaming.api.TimeCharacteristic;
 import org.apache.flink.streaming.api.checkpoint.ListCheckpointed;
-import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
 import org.apache.flink.streaming.api.functions.sink.RichSinkFunction;
 import org.apache.flink.streaming.api.functions.source.RichSourceFunction;
 import org.apache.flink.streaming.api.functions.windowing.RichWindowFunction;
 import org.apache.flink.streaming.api.watermark.Watermark;
 import org.apache.flink.streaming.api.windowing.time.Time;
 import org.apache.flink.streaming.api.windowing.windows.TimeWindow;
+import org.apache.flink.streaming.util.TestStreamEnvironment;
 import org.apache.flink.test.util.SuccessException;
 import org.apache.flink.util.Collector;
 import org.apache.flink.util.TestLogger;
+
 import org.junit.AfterClass;
 import org.junit.Before;
 import org.junit.BeforeClass;
@@ -81,6 +83,8 @@ public abstract class AbstractEventTimeWindowCheckpointingITCase extends TestLog
 
 	private static LocalFlinkMiniCluster cluster;
 
+	private static TestStreamEnvironment env;
+
 	@Rule
 	public TemporaryFolder tempFolder = new TemporaryFolder();
 
@@ -92,7 +96,7 @@ public abstract class AbstractEventTimeWindowCheckpointingITCase extends TestLog
 	}
 
 	enum StateBackendEnum {
-		MEM, FILE, ROCKSDB_FULLY_ASYNC, MEM_ASYNC, FILE_ASYNC
+		MEM, FILE, ROCKSDB_FULLY_ASYNC, ROCKSDB_INCREMENTAL, MEM_ASYNC, FILE_ASYNC
 	}
 
 	@BeforeClass
@@ -101,9 +105,14 @@ public abstract class AbstractEventTimeWindowCheckpointingITCase extends TestLog
 		config.setInteger(ConfigConstants.LOCAL_NUMBER_TASK_MANAGER, 2);
 		config.setInteger(ConfigConstants.TASK_MANAGER_NUM_TASK_SLOTS, PARALLELISM / 2);
 		config.setLong(TaskManagerOptions.MANAGED_MEMORY_SIZE, 48L);
+		// the default network buffers size (10% of heap max =~ 150MB) seems to much for this test case
+		config.setLong(TaskManagerOptions.NETWORK_BUFFERS_MEMORY_MAX, 80L << 20); // 80 MB
 
 		cluster = new LocalFlinkMiniCluster(config, false);
 		cluster.start();
+
+		env = new TestStreamEnvironment(cluster, PARALLELISM);
+		env.getConfig().setUseSnapshotCompression(true);
 	}
 
 	@AfterClass
@@ -139,6 +148,20 @@ public abstract class AbstractEventTimeWindowCheckpointingITCase extends TestLog
 				this.stateBackend = rdb;
 				break;
 			}
+			case ROCKSDB_INCREMENTAL: {
+				String rocksDb = tempFolder.newFolder().getAbsolutePath();
+				String backups = tempFolder.newFolder().getAbsolutePath();
+				// we use the fs backend with small threshold here to test the behaviour with file
+				// references, not self contained byte handles
+				RocksDBStateBackend rdb =
+					new RocksDBStateBackend(
+						new FsStateBackend(
+							new Path("file://" + backups).toUri(), 16),
+						true);
+				rdb.setDbStoragePath(rocksDb);
+				this.stateBackend = rdb;
+				break;
+			}
 
 		}
 	}
@@ -147,15 +170,12 @@ public abstract class AbstractEventTimeWindowCheckpointingITCase extends TestLog
 
 	@Test
 	public void testTumblingTimeWindow() {
-		final int NUM_ELEMENTS_PER_KEY = numElementsPerKey();
-		final int WINDOW_SIZE = windowSize();
-		final int NUM_KEYS = numKeys();
+		final int numElementsPerKey = numElementsPerKey();
+		final int windowSize = windowSize();
+		final int numKeys = numKeys();
 		FailingSource.reset();
-		
+
 		try {
-			StreamExecutionEnvironment env = StreamExecutionEnvironment.createRemoteEnvironment(
-					"localhost", cluster.getLeaderRPCPort());
-			
 			env.setParallelism(PARALLELISM);
 			env.setStreamTimeCharacteristic(TimeCharacteristic.EventTime);
 			env.enableCheckpointing(100);
@@ -164,10 +184,10 @@ public abstract class AbstractEventTimeWindowCheckpointingITCase extends TestLog
 			env.setStateBackend(this.stateBackend);
 
 			env
-					.addSource(new FailingSource(NUM_KEYS, NUM_ELEMENTS_PER_KEY, NUM_ELEMENTS_PER_KEY / 3))
+					.addSource(new FailingSource(numKeys, numElementsPerKey, numElementsPerKey / 3))
 					.rebalance()
 					.keyBy(0)
-					.timeWindow(Time.of(WINDOW_SIZE, MILLISECONDS))
+					.timeWindow(Time.of(windowSize, MILLISECONDS))
 					.apply(new RichWindowFunction<Tuple2<Long, IntType>, Tuple4<Long, Long, Long, IntType>, Tuple, TimeWindow>() {
 
 						private boolean open = false;
@@ -198,8 +218,7 @@ public abstract class AbstractEventTimeWindowCheckpointingITCase extends TestLog
 							out.collect(new Tuple4<>(key, window.getStart(), window.getEnd(), new IntType(sum)));
 						}
 					})
-					.addSink(new ValidatingSink(NUM_KEYS, NUM_ELEMENTS_PER_KEY / WINDOW_SIZE)).setParallelism(1);
-
+					.addSink(new ValidatingSink(numKeys, numElementsPerKey / windowSize)).setParallelism(1);
 
 			tryExecute(env, "Tumbling Window Test");
 		}
@@ -220,15 +239,12 @@ public abstract class AbstractEventTimeWindowCheckpointingITCase extends TestLog
 	}
 
 	public void doTestTumblingTimeWindowWithKVState(int maxParallelism) {
-		final int NUM_ELEMENTS_PER_KEY = numElementsPerKey();
-		final int WINDOW_SIZE = windowSize();
-		final int NUM_KEYS = numKeys();
+		final int numElementsPerKey = numElementsPerKey();
+		final int windowSize = windowSize();
+		final int numKeys = numKeys();
 		FailingSource.reset();
 
 		try {
-			StreamExecutionEnvironment env = StreamExecutionEnvironment.createRemoteEnvironment(
-					"localhost", cluster.getLeaderRPCPort());
-
 			env.setParallelism(PARALLELISM);
 			env.setMaxParallelism(maxParallelism);
 			env.setStreamTimeCharacteristic(TimeCharacteristic.EventTime);
@@ -238,10 +254,10 @@ public abstract class AbstractEventTimeWindowCheckpointingITCase extends TestLog
 			env.setStateBackend(this.stateBackend);
 
 			env
-					.addSource(new FailingSource(NUM_KEYS, NUM_ELEMENTS_PER_KEY, NUM_ELEMENTS_PER_KEY / 3))
+					.addSource(new FailingSource(numKeys, numElementsPerKey, numElementsPerKey / 3))
 					.rebalance()
 					.keyBy(0)
-					.timeWindow(Time.of(WINDOW_SIZE, MILLISECONDS))
+					.timeWindow(Time.of(windowSize, MILLISECONDS))
 					.apply(new RichWindowFunction<Tuple2<Long, IntType>, Tuple4<Long, Long, Long, IntType>, Tuple, TimeWindow>() {
 
 						private boolean open = false;
@@ -276,8 +292,7 @@ public abstract class AbstractEventTimeWindowCheckpointingITCase extends TestLog
 							out.collect(new Tuple4<>(tuple.<Long>getField(0), window.getStart(), window.getEnd(), new IntType(count.value())));
 						}
 					})
-					.addSink(new CountValidatingSink(NUM_KEYS, NUM_ELEMENTS_PER_KEY / WINDOW_SIZE)).setParallelism(1);
-
+					.addSink(new CountValidatingSink(numKeys, numElementsPerKey / windowSize)).setParallelism(1);
 
 			tryExecute(env, "Tumbling Window Test");
 		}
@@ -289,29 +304,27 @@ public abstract class AbstractEventTimeWindowCheckpointingITCase extends TestLog
 
 	@Test
 	public void testSlidingTimeWindow() {
-		final int NUM_ELEMENTS_PER_KEY = numElementsPerKey();
-		final int WINDOW_SIZE = windowSize();
-		final int WINDOW_SLIDE = windowSlide();
-		final int NUM_KEYS = numKeys();
+		final int numElementsPerKey = numElementsPerKey();
+		final int windowSize = windowSize();
+		final int windowSlide = windowSlide();
+		final int numKeys = numKeys();
 		FailingSource.reset();
 
 		try {
-			StreamExecutionEnvironment env = StreamExecutionEnvironment.createRemoteEnvironment(
-					"localhost", cluster.getLeaderRPCPort());
-
-			env.setParallelism(PARALLELISM);
 			env.setMaxParallelism(2 * PARALLELISM);
+			env.setParallelism(PARALLELISM);
 			env.setStreamTimeCharacteristic(TimeCharacteristic.EventTime);
 			env.enableCheckpointing(100);
 			env.setRestartStrategy(RestartStrategies.fixedDelayRestart(3, 0));
 			env.getConfig().disableSysoutLogging();
 			env.setStateBackend(this.stateBackend);
+			env.getConfig().setUseSnapshotCompression(true);
 
 			env
-					.addSource(new FailingSource(NUM_KEYS, NUM_ELEMENTS_PER_KEY, NUM_ELEMENTS_PER_KEY / 3))
+					.addSource(new FailingSource(numKeys, numElementsPerKey, numElementsPerKey / 3))
 					.rebalance()
 					.keyBy(0)
-					.timeWindow(Time.of(WINDOW_SIZE, MILLISECONDS), Time.of(WINDOW_SLIDE, MILLISECONDS))
+					.timeWindow(Time.of(windowSize, MILLISECONDS), Time.of(windowSlide, MILLISECONDS))
 					.apply(new RichWindowFunction<Tuple2<Long, IntType>, Tuple4<Long, Long, Long, IntType>, Tuple, TimeWindow>() {
 
 						private boolean open = false;
@@ -342,8 +355,7 @@ public abstract class AbstractEventTimeWindowCheckpointingITCase extends TestLog
 							out.collect(new Tuple4<>(key, window.getStart(), window.getEnd(), new IntType(sum)));
 						}
 					})
-					.addSink(new ValidatingSink(NUM_KEYS, NUM_ELEMENTS_PER_KEY / WINDOW_SLIDE)).setParallelism(1);
-
+					.addSink(new ValidatingSink(numKeys, numElementsPerKey / windowSlide)).setParallelism(1);
 
 			tryExecute(env, "Tumbling Window Test");
 		}
@@ -355,15 +367,12 @@ public abstract class AbstractEventTimeWindowCheckpointingITCase extends TestLog
 
 	@Test
 	public void testPreAggregatedTumblingTimeWindow() {
-		final int NUM_ELEMENTS_PER_KEY = numElementsPerKey();
-		final int WINDOW_SIZE = windowSize();
-		final int NUM_KEYS = numKeys();
+		final int numElementsPerKey = numElementsPerKey();
+		final int windowSize = windowSize();
+		final int numKeys = numKeys();
 		FailingSource.reset();
 
 		try {
-			StreamExecutionEnvironment env = StreamExecutionEnvironment.createRemoteEnvironment(
-					"localhost", cluster.getLeaderRPCPort());
-
 			env.setParallelism(PARALLELISM);
 			env.setStreamTimeCharacteristic(TimeCharacteristic.EventTime);
 			env.enableCheckpointing(100);
@@ -372,10 +381,10 @@ public abstract class AbstractEventTimeWindowCheckpointingITCase extends TestLog
 			env.setStateBackend(this.stateBackend);
 
 			env
-					.addSource(new FailingSource(NUM_KEYS, NUM_ELEMENTS_PER_KEY, NUM_ELEMENTS_PER_KEY / 3))
+					.addSource(new FailingSource(numKeys, numElementsPerKey, numElementsPerKey / 3))
 					.rebalance()
 					.keyBy(0)
-					.timeWindow(Time.of(WINDOW_SIZE, MILLISECONDS))
+					.timeWindow(Time.of(windowSize, MILLISECONDS))
 					.reduce(
 							new ReduceFunction<Tuple2<Long, IntType>>() {
 
@@ -414,8 +423,7 @@ public abstract class AbstractEventTimeWindowCheckpointingITCase extends TestLog
 							}
 						}
 					})
-					.addSink(new ValidatingSink(NUM_KEYS, NUM_ELEMENTS_PER_KEY / WINDOW_SIZE)).setParallelism(1);
-
+					.addSink(new ValidatingSink(numKeys, numElementsPerKey / windowSize)).setParallelism(1);
 
 			tryExecute(env, "Tumbling Window Test");
 		}
@@ -427,16 +435,13 @@ public abstract class AbstractEventTimeWindowCheckpointingITCase extends TestLog
 
 	@Test
 	public void testPreAggregatedSlidingTimeWindow() {
-		final int NUM_ELEMENTS_PER_KEY = numElementsPerKey();
-		final int WINDOW_SIZE = windowSize();
-		final int WINDOW_SLIDE = windowSlide();
-		final int NUM_KEYS = numKeys();
+		final int numElementsPerKey = numElementsPerKey();
+		final int windowSize = windowSize();
+		final int windowSlide = windowSlide();
+		final int numKeys = numKeys();
 		FailingSource.reset();
 
 		try {
-			StreamExecutionEnvironment env = StreamExecutionEnvironment.createRemoteEnvironment(
-					"localhost", cluster.getLeaderRPCPort());
-
 			env.setParallelism(PARALLELISM);
 			env.setStreamTimeCharacteristic(TimeCharacteristic.EventTime);
 			env.enableCheckpointing(100);
@@ -445,10 +450,10 @@ public abstract class AbstractEventTimeWindowCheckpointingITCase extends TestLog
 			env.setStateBackend(this.stateBackend);
 
 			env
-					.addSource(new FailingSource(NUM_KEYS, NUM_ELEMENTS_PER_KEY, NUM_ELEMENTS_PER_KEY / 3))
+					.addSource(new FailingSource(numKeys, numElementsPerKey, numElementsPerKey / 3))
 					.rebalance()
 					.keyBy(0)
-					.timeWindow(Time.of(WINDOW_SIZE, MILLISECONDS), Time.of(WINDOW_SLIDE, MILLISECONDS))
+					.timeWindow(Time.of(windowSize, MILLISECONDS), Time.of(windowSlide, MILLISECONDS))
 					.reduce(
 							new ReduceFunction<Tuple2<Long, IntType>>() {
 
@@ -489,8 +494,7 @@ public abstract class AbstractEventTimeWindowCheckpointingITCase extends TestLog
 							}
 						}
 					})
-					.addSink(new ValidatingSink(NUM_KEYS, NUM_ELEMENTS_PER_KEY / WINDOW_SLIDE)).setParallelism(1);
-
+					.addSink(new ValidatingSink(numKeys, numElementsPerKey / windowSlide)).setParallelism(1);
 
 			tryExecute(env, "Tumbling Window Test");
 		}
@@ -500,14 +504,12 @@ public abstract class AbstractEventTimeWindowCheckpointingITCase extends TestLog
 		}
 	}
 
-
 	// ------------------------------------------------------------------------
 	//  Utilities
 	// ------------------------------------------------------------------------
 
 	private static class FailingSource extends RichSourceFunction<Tuple2<Long, IntType>>
-			implements ListCheckpointed<Integer>, CheckpointListener
-	{
+			implements ListCheckpointed<Integer>, CheckpointListener {
 		private static volatile boolean failedBefore = false;
 
 		private final int numKeys;
@@ -548,8 +550,7 @@ public abstract class AbstractEventTimeWindowCheckpointingITCase extends TestLog
 				}
 
 				if (numElementsEmitted < numElementsToEmit &&
-						(failedBefore || numElementsEmitted <= failureAfterNumElements))
-				{
+						(failedBefore || numElementsEmitted <= failureAfterNumElements)) {
 					// the function failed before, or we are in the elements before the failure
 					synchronized (ctx.getCheckpointLock()) {
 						int next = numElementsEmitted++;
@@ -661,7 +662,6 @@ public abstract class AbstractEventTimeWindowCheckpointingITCase extends TestLog
 
 			assertEquals("Window start: " + value.f1 + " end: " + value.f2, expectedSum, value.f3.value);
 
-
 			Integer curr = windowCounts.get(value.f0);
 			if (curr != null) {
 				windowCounts.put(value.f0, curr + 1);
@@ -748,7 +748,6 @@ public abstract class AbstractEventTimeWindowCheckpointingITCase extends TestLog
 				windowCounts.put(value.f0, 1);
 			}
 
-
 			// verify the contents of that window, the contents should be:
 			// (key + num windows so far)
 
@@ -791,13 +790,15 @@ public abstract class AbstractEventTimeWindowCheckpointingITCase extends TestLog
 	//  Utilities
 	// ------------------------------------------------------------------------
 
-	public static class IntType {
+	private static class IntType {
 
 		public int value;
 
 		public IntType() {}
 
-		public IntType(int value) { this.value = value; }
+		public IntType(int value) {
+			this.value = value;
+		}
 	}
 
 	protected int numElementsPerKey() {

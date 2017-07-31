@@ -21,7 +21,6 @@ package org.apache.flink.graph.asm.dataset;
 import org.apache.flink.api.common.accumulators.SerializedListAccumulator;
 import org.apache.flink.api.common.typeutils.TypeSerializer;
 import org.apache.flink.api.java.DataSet;
-import org.apache.flink.api.java.ExecutionEnvironment;
 import org.apache.flink.graph.AnalyticHelper;
 
 import java.io.IOException;
@@ -34,7 +33,7 @@ import java.util.List;
  * @param <T> element type
  */
 public class Collect<T>
-extends AbstractDataSetAnalytic<T, List<T>> {
+extends DataSetAnalyticBase<T, List<T>> {
 
 	private static final String COLLECT = "collect";
 
@@ -47,7 +46,6 @@ extends AbstractDataSetAnalytic<T, List<T>> {
 			throws Exception {
 		super.run(input);
 
-		ExecutionEnvironment env = input.getExecutionEnvironment();
 		serializer = input.getType().createSerializer(env.getConfig());
 
 		collectHelper = new CollectHelper<>(serializer);

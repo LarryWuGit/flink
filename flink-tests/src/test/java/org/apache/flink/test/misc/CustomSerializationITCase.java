@@ -19,7 +19,6 @@
 package org.apache.flink.test.misc;
 
 import org.apache.flink.api.common.functions.MapFunction;
-import org.apache.flink.api.java.ExecutionEnvironment;
 import org.apache.flink.api.java.io.DiscardingOutputFormat;
 import org.apache.flink.client.program.ProgramInvocationException;
 import org.apache.flink.configuration.ConfigConstants;
@@ -27,8 +26,11 @@ import org.apache.flink.configuration.Configuration;
 import org.apache.flink.configuration.TaskManagerOptions;
 import org.apache.flink.core.memory.DataInputView;
 import org.apache.flink.core.memory.DataOutputView;
+import org.apache.flink.runtime.client.JobExecutionException;
 import org.apache.flink.runtime.minicluster.LocalFlinkMiniCluster;
+import org.apache.flink.test.util.TestEnvironment;
 import org.apache.flink.types.Value;
+import org.apache.flink.util.TestLogger;
 
 import org.junit.AfterClass;
 import org.junit.BeforeClass;
@@ -39,49 +41,42 @@ import java.io.IOException;
 import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
 
+/**
+ * Test for proper error messages in case user-defined serialization is broken
+ * and detected in the network stack.
+ */
 @SuppressWarnings("serial")
-public class CustomSerializationITCase {
+public class CustomSerializationITCase extends TestLogger {
 
 	private static final int PARLLELISM = 5;
-	
+
 	private static LocalFlinkMiniCluster cluster;
+
+	private static TestEnvironment env;
 
 	@BeforeClass
 	public static void startCluster() {
-		try {
-			Configuration config = new Configuration();
-			config.setInteger(ConfigConstants.TASK_MANAGER_NUM_TASK_SLOTS, PARLLELISM);
-			config.setLong(TaskManagerOptions.MANAGED_MEMORY_SIZE, 30L);
-			cluster = new LocalFlinkMiniCluster(config, false);
-			cluster.start();
-		}
-		catch (Exception e) {
-			e.printStackTrace();
-			fail("Failed to start test cluster: " + e.getMessage());
-		}
+		Configuration config = new Configuration();
+		config.setInteger(ConfigConstants.TASK_MANAGER_NUM_TASK_SLOTS, PARLLELISM);
+		config.setLong(TaskManagerOptions.MANAGED_MEMORY_SIZE, 30L);
+		cluster = new LocalFlinkMiniCluster(config, false);
+		cluster.start();
+
+		env = new TestEnvironment(cluster, PARLLELISM, false);
 	}
 
 	@AfterClass
 	public static void shutdownCluster() {
-		try {
-			cluster.shutdown();
-			cluster = null;
-		}
-		catch (Exception e) {
-			e.printStackTrace();
-			fail("Failed to stop test cluster: " + e.getMessage());
-		}
+		cluster.shutdown();
+		cluster = null;
 	}
-	
+
 	@Test
 	public void testIncorrectSerializer1() {
 		try {
-			ExecutionEnvironment env =
-					ExecutionEnvironment.createRemoteEnvironment("localhost", cluster.getLeaderRPCPort());
-			
 			env.setParallelism(PARLLELISM);
 			env.getConfig().disableSysoutLogging();
-			
+
 			env
 				.generateSequence(1, 10 * PARLLELISM)
 				.map(new MapFunction<Long, ConsumesTooMuch>() {
@@ -92,11 +87,11 @@ public class CustomSerializationITCase {
 				})
 				.rebalance()
 				.output(new DiscardingOutputFormat<ConsumesTooMuch>());
-			
+
 			env.execute();
 		}
-		catch (ProgramInvocationException e) {
-			Throwable rootCause = e.getCause().getCause();
+		catch (JobExecutionException e) {
+			Throwable rootCause = e.getCause();
 			assertTrue(rootCause instanceof IOException);
 			assertTrue(rootCause.getMessage().contains("broken serialization"));
 		}
@@ -109,9 +104,6 @@ public class CustomSerializationITCase {
 	@Test
 	public void testIncorrectSerializer2() {
 		try {
-			ExecutionEnvironment env =
-					ExecutionEnvironment.createRemoteEnvironment("localhost", cluster.getLeaderRPCPort());
-
 			env.setParallelism(PARLLELISM);
 			env.getConfig().disableSysoutLogging();
 
@@ -128,8 +120,8 @@ public class CustomSerializationITCase {
 
 			env.execute();
 		}
-		catch (ProgramInvocationException e) {
-			Throwable rootCause = e.getCause().getCause();
+		catch (JobExecutionException e) {
+			Throwable rootCause = e.getCause();
 			assertTrue(rootCause instanceof IOException);
 			assertTrue(rootCause.getMessage().contains("broken serialization"));
 		}
@@ -142,9 +134,6 @@ public class CustomSerializationITCase {
 	@Test
 	public void testIncorrectSerializer3() {
 		try {
-			ExecutionEnvironment env =
-					ExecutionEnvironment.createRemoteEnvironment("localhost", cluster.getLeaderRPCPort());
-
 			env.setParallelism(PARLLELISM);
 			env.getConfig().disableSysoutLogging();
 
@@ -161,8 +150,8 @@ public class CustomSerializationITCase {
 
 			env.execute();
 		}
-		catch (ProgramInvocationException e) {
-			Throwable rootCause = e.getCause().getCause();
+		catch (JobExecutionException e) {
+			Throwable rootCause = e.getCause();
 			assertTrue(rootCause instanceof IOException);
 			assertTrue(rootCause.getMessage().contains("broken serialization"));
 		}
@@ -175,9 +164,6 @@ public class CustomSerializationITCase {
 	@Test
 	public void testIncorrectSerializer4() {
 		try {
-			ExecutionEnvironment env =
-					ExecutionEnvironment.createRemoteEnvironment("localhost", cluster.getLeaderRPCPort());
-
 			env.setParallelism(PARLLELISM);
 			env.getConfig().disableSysoutLogging();
 
@@ -204,11 +190,14 @@ public class CustomSerializationITCase {
 			fail(e.getMessage());
 		}
 	}
-	
+
 	// ------------------------------------------------------------------------
 	//  Custom Data Types with broken Serialization Logic
 	// ------------------------------------------------------------------------
-	
+
+	/**
+	 * {@link Value} reading more data than written.
+	 */
 	public static class ConsumesTooMuch implements Value {
 
 		@Override
@@ -224,6 +213,9 @@ public class CustomSerializationITCase {
 		}
 	}
 
+	/**
+	 * {@link Value} reading more buffers than written.
+	 */
 	public static class ConsumesTooMuchSpanning implements Value {
 
 		@Override
@@ -239,6 +231,9 @@ public class CustomSerializationITCase {
 		}
 	}
 
+	/**
+	 * {@link Value} reading less data than written.
+	 */
 	public static class ConsumesTooLittle implements Value {
 
 		@Override
@@ -254,6 +249,9 @@ public class CustomSerializationITCase {
 		}
 	}
 
+	/**
+	 * {@link Value} reading fewer buffers than written.
+	 */
 	public static class ConsumesTooLittleSpanning implements Value {
 
 		@Override

@@ -18,32 +18,38 @@
 
 package org.apache.flink.graph.drivers;
 
-import org.apache.commons.lang3.text.StrBuilder;
-import org.apache.commons.lang3.text.WordUtils;
+import org.apache.flink.api.java.DataSet;
 import org.apache.flink.graph.Graph;
-import org.apache.flink.graph.drivers.output.CSV;
-import org.apache.flink.graph.drivers.output.Hash;
-import org.apache.flink.graph.drivers.output.Print;
+import org.apache.flink.graph.drivers.parameter.BooleanParameter;
 import org.apache.flink.graph.drivers.parameter.LongParameter;
-import org.apache.flink.graph.library.similarity.JaccardIndex.Result;
 import org.apache.flink.types.CopyableValue;
 
-import static org.apache.flink.api.common.ExecutionConfig.PARALLELISM_DEFAULT;
+import org.apache.commons.lang3.text.StrBuilder;
+import org.apache.commons.lang3.text.WordUtils;
 
 /**
  * Driver for {@link org.apache.flink.graph.library.similarity.JaccardIndex}.
  */
 public class JaccardIndex<K extends CopyableValue<K>, VV, EV>
-extends SimpleDriver<Result<K>>
-implements Driver<K, VV, EV>, CSV, Hash, Print {
+extends DriverBase<K, VV, EV> {
 
-	private LongParameter littleParallelism = new LongParameter(this, "little_parallelism")
-		.setDefaultValue(PARALLELISM_DEFAULT);
+	private LongParameter minNumerator = new LongParameter(this, "minimum_numerator")
+		.setDefaultValue(0)
+		.setMinimumValue(0);
 
-	@Override
-	public String getName() {
-		return this.getClass().getSimpleName();
-	}
+	private LongParameter minDenominator = new LongParameter(this, "minimum_denominator")
+		.setDefaultValue(1)
+		.setMinimumValue(1);
+
+	private LongParameter maxNumerator = new LongParameter(this, "maximum_numerator")
+		.setDefaultValue(1)
+		.setMinimumValue(0);
+
+	private LongParameter maxDenominator = new LongParameter(this, "maximum_denominator")
+		.setDefaultValue(1)
+		.setMinimumValue(1);
+
+	private BooleanParameter mirrorResults = new BooleanParameter(this, "mirror_results");
 
 	@Override
 	public String getShortDescription() {
@@ -64,11 +70,12 @@ implements Driver<K, VV, EV>, CSV, Hash, Print {
 	}
 
 	@Override
-	public void plan(Graph<K, VV, EV> graph) throws Exception {
-		int lp = littleParallelism.getValue().intValue();
-
-		result = graph
+	public DataSet plan(Graph<K, VV, EV> graph) throws Exception {
+		return graph
 			.run(new org.apache.flink.graph.library.similarity.JaccardIndex<K, VV, EV>()
-				.setLittleParallelism(lp));
+				.setMinimumScore(minNumerator.getValue().intValue(), minDenominator.getValue().intValue())
+				.setMaximumScore(maxNumerator.getValue().intValue(), maxDenominator.getValue().intValue())
+				.setMirrorResults(mirrorResults.getValue())
+				.setParallelism(parallelism.getValue().intValue()));
 	}
 }

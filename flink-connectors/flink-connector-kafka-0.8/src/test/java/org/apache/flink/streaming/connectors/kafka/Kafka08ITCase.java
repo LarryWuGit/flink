@@ -17,12 +17,12 @@
 
 package org.apache.flink.streaming.connectors.kafka;
 
-import org.apache.curator.framework.CuratorFramework;
 import org.apache.flink.api.common.restartstrategy.RestartStrategies;
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
 import org.apache.flink.streaming.connectors.kafka.config.StartupMode;
 import org.apache.flink.streaming.connectors.kafka.internals.ZookeeperOffsetHandler;
 
+import org.apache.curator.framework.CuratorFramework;
 import org.junit.Test;
 
 import java.util.Properties;
@@ -31,6 +31,9 @@ import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
 
+/**
+ * IT cases for Kafka 0.8 .
+ */
 public class Kafka08ITCase extends KafkaConsumerTestBase {
 
 	// ------------------------------------------------------------------------
@@ -41,7 +44,6 @@ public class Kafka08ITCase extends KafkaConsumerTestBase {
 	public void testFailOnNoBroker() throws Exception {
 		runFailOnNoBrokerTest();
 	}
-
 
 	@Test(timeout = 60000)
 	public void testConcurrentProducerConsumerTopology() throws Exception {
@@ -79,7 +81,7 @@ public class Kafka08ITCase extends KafkaConsumerTestBase {
 		final String topic = writeSequence("invalidOffsetTopic", 20, parallelism, 1);
 
 		// set invalid offset:
-		CuratorFramework curatorClient = ((KafkaTestEnvironmentImpl)kafkaServer).createCuratorClient();
+		CuratorFramework curatorClient = ((KafkaTestEnvironmentImpl) kafkaServer).createCuratorClient();
 		ZookeeperOffsetHandler.setOffsetInZooKeeper(curatorClient, standardProps.getProperty("group.id"), topic, 0, 1234);
 		curatorClient.close();
 
@@ -87,7 +89,7 @@ public class Kafka08ITCase extends KafkaConsumerTestBase {
 		final int valuesCount = 20;
 		final int startFrom = 0;
 
-		final StreamExecutionEnvironment env = StreamExecutionEnvironment.createRemoteEnvironment("localhost", flinkPort);
+		final StreamExecutionEnvironment env = StreamExecutionEnvironment.getExecutionEnvironment();
 		env.getConfig().disableSysoutLogging();
 
 		readSequence(env, StartupMode.GROUP_OFFSETS, null, standardProps, parallelism, topic, valuesCount, startFrom);
@@ -149,11 +151,6 @@ public class Kafka08ITCase extends KafkaConsumerTestBase {
 	}
 
 	@Test(timeout = 60000)
-	public void testStartFromZookeeperCommitOffsets() throws Exception {
-		runStartFromKafkaCommitOffsets();
-	}
-
-	@Test(timeout = 60000)
 	public void testAutoOffsetRetrievalAndCommitToZookeeper() throws Exception {
 		runAutoOffsetRetrievalAndCommitToKafka();
 	}
@@ -166,7 +163,7 @@ public class Kafka08ITCase extends KafkaConsumerTestBase {
 
 			final Long offset = (long) (Math.random() * Long.MAX_VALUE);
 
-			CuratorFramework curatorFramework = ((KafkaTestEnvironmentImpl)kafkaServer ).createCuratorClient();
+			CuratorFramework curatorFramework = ((KafkaTestEnvironmentImpl) kafkaServer).createCuratorClient();
 			kafkaServer.createTestTopic(topicName, 3, 2);
 
 			ZookeeperOffsetHandler.setOffsetInZooKeeper(curatorFramework, groupId, topicName, 0, offset);
@@ -190,7 +187,7 @@ public class Kafka08ITCase extends KafkaConsumerTestBase {
 		// write a sequence from 0 to 99 to each of the 3 partitions.
 		final String topicName = writeSequence("testOffsetAutocommit", 100, parallelism, 1);
 
-		StreamExecutionEnvironment env = StreamExecutionEnvironment.createRemoteEnvironment("localhost", flinkPort);
+		StreamExecutionEnvironment env = StreamExecutionEnvironment.getExecutionEnvironment();
 		// NOTE: We are not enabling the checkpointing!
 		env.getConfig().disableSysoutLogging();
 		env.getConfig().setRestartStrategy(RestartStrategies.noRestart());
@@ -211,7 +208,7 @@ public class Kafka08ITCase extends KafkaConsumerTestBase {
 		readSequence(env, StartupMode.GROUP_OFFSETS, null, readProps, parallelism, topicName, 100, 0);
 
 		// get the offset
-		CuratorFramework curatorFramework = ((KafkaTestEnvironmentImpl)kafkaServer).createCuratorClient();
+		CuratorFramework curatorFramework = ((KafkaTestEnvironmentImpl) kafkaServer).createCuratorClient();
 
 		Long o1 = ZookeeperOffsetHandler.getOffsetFromZooKeeper(curatorFramework, standardProps.getProperty("group.id"), topicName, 0);
 		Long o2 = ZookeeperOffsetHandler.getOffsetFromZooKeeper(curatorFramework, standardProps.getProperty("group.id"), topicName, 1);
@@ -223,7 +220,7 @@ public class Kafka08ITCase extends KafkaConsumerTestBase {
 		boolean atLeastOneOffsetSet = (o1 != null && o1 > 0 && o1 <= 100) ||
 			(o2 != null && o2 > 0 && o2 <= 100) ||
 			(o3 != null && o3 > 0 && o3 <= 100);
-		assertTrue("Expecting at least one offset to be set o1="+o1+" o2="+o2+" o3="+o3, atLeastOneOffsetSet);
+		assertTrue("Expecting at least one offset to be set o1=" + o1 + " o2=" + o2 + " o3=" + o3, atLeastOneOffsetSet);
 
 		deleteTestTopic(topicName);
 	}
@@ -245,7 +242,7 @@ public class Kafka08ITCase extends KafkaConsumerTestBase {
 		runAllDeletesTest();
 	}
 
-	@Test(timeout=60000)
+	@Test(timeout = 60000)
 	public void testEndOfStream() throws Exception {
 		runEndOfStreamTest();
 	}

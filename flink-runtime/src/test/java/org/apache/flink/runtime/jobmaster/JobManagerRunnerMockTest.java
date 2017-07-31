@@ -21,6 +21,7 @@ package org.apache.flink.runtime.jobmaster;
 import org.apache.flink.api.common.JobExecutionResult;
 import org.apache.flink.api.common.JobID;
 import org.apache.flink.configuration.Configuration;
+import org.apache.flink.runtime.blob.BlobServer;
 import org.apache.flink.runtime.blob.BlobStore;
 import org.apache.flink.runtime.clusterframework.types.ResourceID;
 import org.apache.flink.runtime.heartbeat.HeartbeatServices;
@@ -35,6 +36,7 @@ import org.apache.flink.runtime.metrics.MetricRegistry;
 import org.apache.flink.runtime.metrics.MetricRegistryConfiguration;
 import org.apache.flink.runtime.rpc.FatalErrorHandler;
 import org.apache.flink.runtime.rpc.RpcService;
+import org.apache.flink.util.TestLogger;
 import org.junit.After;
 import org.junit.Before;
 import org.junit.Ignore;
@@ -56,7 +58,7 @@ import static org.mockito.Mockito.when;
 
 @RunWith(PowerMockRunner.class)
 @PrepareForTest(JobManagerRunner.class)
-public class JobManagerRunnerMockTest {
+public class JobManagerRunnerMockTest extends TestLogger {
 
 	private JobManagerRunner runner;
 
@@ -110,7 +112,7 @@ public class JobManagerRunnerMockTest {
 			mockRpc,
 			haServices,
 			heartbeatServices,
-			JobManagerServices.fromConfiguration(new Configuration(), haServices),
+			JobManagerServices.fromConfiguration(new Configuration(), mock(BlobServer.class)),
 			new MetricRegistry(MetricRegistryConfiguration.defaultMetricRegistryConfiguration()),
 			jobCompletion,
 			jobCompletion));

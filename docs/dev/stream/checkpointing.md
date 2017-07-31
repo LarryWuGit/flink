@@ -32,7 +32,7 @@ any type of more elaborate operation.
 In order to make state fault tolerant, Flink needs to **checkpoint** the state. Checkpoints allow Flink to recover state and positions
 in the streams to give the application the same semantics as a failure-free execution.
 
-The [documentation on streaming fault tolerance](../../internals/stream_checkpointing.html) describe in detail the technique behind Flink's streaming fault tolerance mechanism.
+The [documentation on streaming fault tolerance](../../internals/stream_checkpointing.html) describes in detail the technique behind Flink's streaming fault tolerance mechanism.
 
 
 ## Prerequisites
@@ -72,6 +72,8 @@ Other parameters for checkpointing include:
 
     This option cannot be used when a minimum time between checkpoints is defined.
 
+  - *externalized checkpoints*: You can configure periodic checkpoints to be persisted externally. Externalized checkpoints write their meta data out to persistent storage and are *not* automatically cleaned up when the job fails. This way, you will have a checkpoint around to resume from if your job fails. There are more details in the [deployment notes on externalized checkpoints](../../setup/checkpoints.html#externalized-checkpoints).
+
 <div class="codetabs" markdown="1">
 <div data-lang="java" markdown="1">
 {% highlight java %}
@@ -93,6 +95,9 @@ env.getCheckpointConfig().setCheckpointTimeout(60000);
 
 // allow only one checkpoint to be in progress at the same time
 env.getCheckpointConfig().setMaxConcurrentCheckpoints(1);
+
+// enable externalized checkpoints which are retained after job cancellation
+env.getCheckpointConfig().enableExternalizedCheckpoints(ExternalizedCheckpointCleanup.RETAIN_ON_CANCELLATION);
 {% endhighlight %}
 </div>
 <div data-lang="scala" markdown="1">
@@ -119,17 +124,34 @@ env.getCheckpointConfig.setMaxConcurrentCheckpoints(1)
 </div>
 </div>
 
+### Related Config Options
+
+Some more parameters and/or defaults may be set via `conf/flink-conf.yaml` (see [configuration](config.html) for a full guide):
+
+- `state.backend`: The backend that will be used to store operator state checkpoints if checkpointing is enabled. Supported backends:
+   -  `jobmanager`: In-memory state, backup to JobManager's/ZooKeeper's memory. Should be used only for minimal state (Kafka offsets) or testing and local debugging.
+   -  `filesystem`: State is in-memory on the TaskManagers, and state snapshots are stored in a file system. Supported are all filesystems supported by Flink, for example HDFS, S3, ...
+
+- `state.backend.fs.checkpointdir`: Directory for storing checkpoints in a Flink supported filesystem. Note: State backend must be accessible from the JobManager, use `file://` only for local setups.
+
+- `state.backend.rocksdb.checkpointdir`:  The local directory for storing RocksDB files, or a list of directories separated by the systems directory delimiter (for example ‘:’ (colon) on Linux/Unix). (DEFAULT value is `taskmanager.tmp.dirs`)
+
+- `state.checkpoints.dir`: The target directory for meta data of [externalized checkpoints](../../setup/checkpoints.html#externalized-checkpoints).
+
+- `state.checkpoints.num-retained`: The number of completed checkpoint instances to retain. Having more than one allows recovery fallback to an earlier checkpoints if the latest checkpoint is corrupt. (Default: 1)
+
 {% top %}
 
 
 ## Selecting a State Backend
 
-The checkpointing mechanism stores the progress in the data sources and data sinks, the state of windows, as well as the [user-defined state](state.html) consistently to
-provide *exactly once* processing semantics. Where the checkpoints are stored (e.g., JobManager memory, file system, database) depends on the configured
+Flink's [checkpointing mechanism]({{ site.baseurl }}/internals/stream_checkpointing.html) stores consistent snapshots
+of all the state in timers and stateful operators, including connectors, windows, and any [user-defined state](state.html).
+Where the checkpoints are stored (e.g., JobManager memory, file system, database) depends on the configured
 **State Backend**. 
 
-By default state will be kept in memory, and checkpoints will be stored in-memory at the master node (the JobManager). For proper persistence of large state,
-Flink supports various forms of storing and checkpointing state in so called **State Backends**, which can be set via `StreamExecutionEnvironment.setStateBackend(…)`.
+By default, state is kept in memory in the TaskManagers and checkpoints are stored in memory in the JobManager. For proper persistence of large state,
+Flink supports various approaches for storing and checkpointing state in other state backends. The choice of state backend can be configured via `StreamExecutionEnvironment.setStateBackend(…)`.
 
 See [state backends](../../ops/state_backends.html) for more details on the available state backends and options for job-wide and cluster-wide configuration.
 

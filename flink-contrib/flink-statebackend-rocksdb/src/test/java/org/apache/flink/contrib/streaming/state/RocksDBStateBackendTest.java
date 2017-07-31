@@ -18,8 +18,6 @@
 
 package org.apache.flink.contrib.streaming.state;
 
-import org.apache.commons.io.FileUtils;
-import org.apache.commons.io.filefilter.IOFileFilter;
 import org.apache.flink.api.common.ExecutionConfig;
 import org.apache.flink.api.common.JobID;
 import org.apache.flink.api.common.state.ValueState;
@@ -31,21 +29,32 @@ import org.apache.flink.runtime.execution.Environment;
 import org.apache.flink.runtime.operators.testutils.DummyEnvironment;
 import org.apache.flink.runtime.query.TaskKvStateRegistry;
 import org.apache.flink.runtime.state.AbstractKeyedStateBackend;
+import org.apache.flink.runtime.state.IncrementalKeyedStateHandle;
 import org.apache.flink.runtime.state.KeyGroupRange;
-import org.apache.flink.runtime.state.KeyGroupsStateHandle;
 import org.apache.flink.runtime.state.KeyedStateHandle;
+import org.apache.flink.runtime.state.SharedStateRegistry;
 import org.apache.flink.runtime.state.StateBackendTestBase;
+import org.apache.flink.runtime.state.StateHandleID;
+import org.apache.flink.runtime.state.StreamStateHandle;
 import org.apache.flink.runtime.state.VoidNamespace;
 import org.apache.flink.runtime.state.VoidNamespaceSerializer;
 import org.apache.flink.runtime.state.filesystem.FsStateBackend;
 import org.apache.flink.runtime.util.BlockerCheckpointStreamFactory;
+
+import org.apache.commons.io.FileUtils;
+import org.apache.commons.io.filefilter.IOFileFilter;
 import org.junit.Rule;
 import org.junit.Test;
 import org.junit.rules.TemporaryFolder;
+import org.junit.runner.RunWith;
+import org.junit.runners.Parameterized;
+import org.mockito.Mockito;
 import org.mockito.invocation.InvocationOnMock;
 import org.mockito.stubbing.Answer;
 import org.rocksdb.ColumnFamilyDescriptor;
 import org.rocksdb.ColumnFamilyHandle;
+import org.rocksdb.ColumnFamilyOptions;
+import org.rocksdb.DBOptions;
 import org.rocksdb.ReadOptions;
 import org.rocksdb.RocksDB;
 import org.rocksdb.RocksIterator;
@@ -55,8 +64,13 @@ import org.rocksdb.Snapshot;
 import java.io.File;
 import java.io.IOException;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collection;
+import java.util.HashMap;
+import java.util.LinkedList;
 import java.util.List;
+import java.util.Map;
+import java.util.Queue;
 import java.util.concurrent.RunnableFuture;
 
 import static junit.framework.TestCase.assertNotNull;
@@ -65,6 +79,7 @@ import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
 import static org.mockito.Matchers.any;
 import static org.mockito.Mockito.doAnswer;
+import static org.mockito.Mockito.reset;
 import static org.mockito.Mockito.verify;
 import static org.mockito.internal.verification.VerificationModeFactory.times;
 import static org.powermock.api.mockito.PowerMockito.mock;
@@ -73,6 +88,7 @@ import static org.powermock.api.mockito.PowerMockito.spy;
 /**
  * Tests for the partitioned state part of {@link RocksDBStateBackend}.
  */
+@RunWith(Parameterized.class)
 public class RocksDBStateBackendTest extends StateBackendTestBase<RocksDBStateBackend> {
 
 	private OneShotLatch blocker;
@@ -83,17 +99,25 @@ public class RocksDBStateBackendTest extends StateBackendTestBase<RocksDBStateBa
 	private ValueState<Integer> testState1;
 	private ValueState<String> testState2;
 
+	@Parameterized.Parameters(name = "Incremental checkpointing: {0}")
+	public static Collection<Boolean> parameters() {
+		return Arrays.asList(false, true);
+	}
+
+	@Parameterized.Parameter
+	public boolean enableIncrementalCheckpointing;
+
 	@Rule
 	public TemporaryFolder tempFolder = new TemporaryFolder();
 
 	// Store it because we need it for the cleanup test.
-	private String dbPath;
+	String dbPath;
 
 	@Override
 	protected RocksDBStateBackend getStateBackend() throws IOException {
 		dbPath = tempFolder.newFolder().getAbsolutePath();
 		String checkpointPath = tempFolder.newFolder().toURI().toString();
-		RocksDBStateBackend backend = new RocksDBStateBackend(new FsStateBackend(checkpointPath));
+		RocksDBStateBackend backend = new RocksDBStateBackend(new FsStateBackend(checkpointPath), enableIncrementalCheckpointing);
 		backend.setDbStoragePath(dbPath);
 		return backend;
 	}
@@ -105,7 +129,7 @@ public class RocksDBStateBackendTest extends StateBackendTestBase<RocksDBStateBa
 		testStreamFactory = new BlockerCheckpointStreamFactory(1024 * 1024);
 		testStreamFactory.setBlockerLatch(blocker);
 		testStreamFactory.setWaiterLatch(waiter);
-		testStreamFactory.setAfterNumberInvocations(100);
+		testStreamFactory.setAfterNumberInvocations(10);
 
 		RocksDBStateBackend backend = getStateBackend();
 		Environment env = new DummyEnvironment("TestTask", 1, 0);
@@ -118,6 +142,8 @@ public class RocksDBStateBackendTest extends StateBackendTestBase<RocksDBStateBa
 				2,
 				new KeyGroupRange(0, 1),
 				mock(TaskKvStateRegistry.class));
+
+		keyedStateBackend.restore(null);
 
 		testState1 = keyedStateBackend.getPartitionedState(
 				VoidNamespace.INSTANCE,
@@ -178,8 +204,10 @@ public class RocksDBStateBackendTest extends StateBackendTestBase<RocksDBStateBa
 
 		RocksDB spyDB = keyedStateBackend.db;
 
-		verify(spyDB, times(1)).getSnapshot();
-		verify(spyDB, times(0)).releaseSnapshot(any(Snapshot.class));
+		if (!enableIncrementalCheckpointing) {
+			verify(spyDB, times(1)).getSnapshot();
+			verify(spyDB, times(0)).releaseSnapshot(any(Snapshot.class));
+		}
 
 		this.keyedStateBackend.dispose();
 		verify(spyDB, times(1)).close();
@@ -209,6 +237,28 @@ public class RocksDBStateBackendTest extends StateBackendTestBase<RocksDBStateBa
 	}
 
 	@Test
+	public void testCorrectMergeOperatorSet() throws IOException {
+		ColumnFamilyOptions columnFamilyOptions = mock(ColumnFamilyOptions.class);
+
+		try (RocksDBKeyedStateBackend<Integer> test = new RocksDBKeyedStateBackend<>(
+			"test",
+			Thread.currentThread().getContextClassLoader(),
+			tempFolder.newFolder(),
+			mock(DBOptions.class),
+			columnFamilyOptions,
+			mock(TaskKvStateRegistry.class),
+			IntSerializer.INSTANCE,
+			1,
+			new KeyGroupRange(0, 0),
+			new ExecutionConfig(),
+			enableIncrementalCheckpointing)) {
+
+			verify(columnFamilyOptions, Mockito.times(1))
+				.setMergeOperatorName(RocksDBKeyedStateBackend.MERGE_OPERATOR_NAME);
+		}
+	}
+
+	@Test
 	public void testReleasingSnapshotAfterBackendClosed() throws Exception {
 		setupRocksKeyedStateBackend();
 		RunnableFuture<KeyedStateHandle> snapshot = keyedStateBackend.snapshot(0L, 0L, testStreamFactory,
@@ -216,8 +266,10 @@ public class RocksDBStateBackendTest extends StateBackendTestBase<RocksDBStateBa
 
 		RocksDB spyDB = keyedStateBackend.db;
 
-		verify(spyDB, times(1)).getSnapshot();
-		verify(spyDB, times(0)).releaseSnapshot(any(Snapshot.class));
+		if (!enableIncrementalCheckpointing) {
+			verify(spyDB, times(1)).getSnapshot();
+			verify(spyDB, times(0)).releaseSnapshot(any(Snapshot.class));
+		}
 
 		this.keyedStateBackend.dispose();
 		verify(spyDB, times(1)).close();
@@ -291,8 +343,8 @@ public class RocksDBStateBackendTest extends StateBackendTestBase<RocksDBStateBa
 		waiter.await(); // wait for snapshot to run
 		waiter.reset();
 		runStateUpdates();
-		blocker.trigger(); // allow checkpointing to start writing
 		snapshot.cancel(true);
+		blocker.trigger(); // allow checkpointing to start writing
 		assertTrue(testStreamFactory.getLastCreatedStream().isClosed());
 		waiter.await(); // wait for snapshot stream writing to run
 		try {
@@ -301,8 +353,8 @@ public class RocksDBStateBackendTest extends StateBackendTestBase<RocksDBStateBa
 		} catch (Exception ignored) {
 		}
 
-		verifyRocksObjectsReleased();
 		asyncSnapshotThread.join();
+		verifyRocksObjectsReleased();
 	}
 
 	@Test
@@ -319,7 +371,6 @@ public class RocksDBStateBackendTest extends StateBackendTestBase<RocksDBStateBa
 		backend.setCurrentKey(1);
 		state.update("Hello");
 
-
 		Collection<File> allFilesInDbDir =
 				FileUtils.listFilesAndDirs(new File(dbPath), new AcceptAllFilter(), new AcceptAllFilter());
 
@@ -335,6 +386,82 @@ public class RocksDBStateBackendTest extends StateBackendTestBase<RocksDBStateBa
 		assertEquals(1, allFilesInDbDir.size());
 	}
 
+	@Test
+	public void testSharedIncrementalStateDeRegistration() throws Exception {
+		if (enableIncrementalCheckpointing) {
+			AbstractKeyedStateBackend<Integer> backend = createKeyedBackend(IntSerializer.INSTANCE);
+			ValueStateDescriptor<String> kvId =
+				new ValueStateDescriptor<>("id", String.class, null);
+
+			kvId.initializeSerializerUnlessSet(new ExecutionConfig());
+
+			ValueState<String> state =
+				backend.getPartitionedState(VoidNamespace.INSTANCE, VoidNamespaceSerializer.INSTANCE, kvId);
+
+			Queue<IncrementalKeyedStateHandle> previousStateHandles = new LinkedList<>();
+			SharedStateRegistry sharedStateRegistry = spy(new SharedStateRegistry());
+			for (int checkpointId = 0; checkpointId < 3; ++checkpointId) {
+
+				reset(sharedStateRegistry);
+
+				backend.setCurrentKey(checkpointId);
+				state.update("Hello-" + checkpointId);
+
+				RunnableFuture<KeyedStateHandle> snapshot = backend.snapshot(
+					checkpointId,
+					checkpointId,
+					createStreamFactory(),
+					CheckpointOptions.forFullCheckpoint());
+
+				snapshot.run();
+
+				IncrementalKeyedStateHandle stateHandle = (IncrementalKeyedStateHandle) snapshot.get();
+				Map<StateHandleID, StreamStateHandle> sharedState =
+					new HashMap<>(stateHandle.getSharedState());
+
+				stateHandle.registerSharedStates(sharedStateRegistry);
+
+				for (Map.Entry<StateHandleID, StreamStateHandle> e : sharedState.entrySet()) {
+					verify(sharedStateRegistry).registerReference(
+						stateHandle.createSharedStateRegistryKeyFromFileName(e.getKey()),
+						e.getValue());
+				}
+
+				previousStateHandles.add(stateHandle);
+				backend.notifyCheckpointComplete(checkpointId);
+
+				//-----------------------------------------------------------------
+
+				if (previousStateHandles.size() > 1) {
+					checkRemove(previousStateHandles.remove(), sharedStateRegistry);
+				}
+			}
+
+			while (!previousStateHandles.isEmpty()) {
+
+				reset(sharedStateRegistry);
+
+				checkRemove(previousStateHandles.remove(), sharedStateRegistry);
+			}
+
+			backend.close();
+			backend.dispose();
+		}
+	}
+
+	private void checkRemove(IncrementalKeyedStateHandle remove, SharedStateRegistry registry) throws Exception {
+		for (StateHandleID id : remove.getSharedState().keySet()) {
+			verify(registry, times(0)).unregisterReference(
+				remove.createSharedStateRegistryKeyFromFileName(id));
+		}
+
+		remove.discardState();
+
+		for (StateHandleID id : remove.getSharedState().keySet()) {
+			verify(registry).unregisterReference(
+				remove.createSharedStateRegistryKeyFromFileName(id));
+		}
+	}
 
 	private void runStateUpdates() throws Exception{
 		for (int i = 50; i < 150; ++i) {
@@ -356,8 +483,10 @@ public class RocksDBStateBackendTest extends StateBackendTestBase<RocksDBStateBa
 		assertNotNull(null, keyedStateBackend.db);
 		RocksDB spyDB = keyedStateBackend.db;
 
-		verify(spyDB, times(1)).getSnapshot();
-		verify(spyDB, times(1)).releaseSnapshot(any(Snapshot.class));
+		if (!enableIncrementalCheckpointing) {
+			verify(spyDB, times(1)).getSnapshot();
+			verify(spyDB, times(1)).releaseSnapshot(any(Snapshot.class));
+		}
 
 		keyedStateBackend.dispose();
 		verify(spyDB, times(1)).close();

@@ -18,14 +18,17 @@
 
 package org.apache.flink.runtime.webmonitor.handlers;
 
-import com.fasterxml.jackson.core.JsonGenerator;
+import org.apache.flink.runtime.execution.ExecutionState;
 import org.apache.flink.runtime.executiongraph.AccessExecutionGraph;
 import org.apache.flink.runtime.executiongraph.AccessExecutionVertex;
+import org.apache.flink.runtime.executiongraph.ErrorInfo;
 import org.apache.flink.runtime.taskmanager.TaskManagerLocation;
 import org.apache.flink.runtime.webmonitor.ExecutionGraphHolder;
 import org.apache.flink.runtime.webmonitor.history.ArchivedJson;
 import org.apache.flink.runtime.webmonitor.history.JsonArchivist;
 import org.apache.flink.util.ExceptionUtils;
+
+import com.fasterxml.jackson.core.JsonGenerator;
 
 import java.io.IOException;
 import java.io.StringWriter;
@@ -41,7 +44,7 @@ public class JobExceptionsHandler extends AbstractExecutionGraphRequestHandler {
 	private static final String JOB_EXCEPTIONS_REST_PATH = "/jobs/:jobid/exceptions";
 
 	static final int MAX_NUMBER_EXCEPTION_TO_REPORT = 20;
-	
+
 	public JobExceptionsHandler(ExecutionGraphHolder executionGraphHolder) {
 		super(executionGraphHolder);
 	}
@@ -56,6 +59,9 @@ public class JobExceptionsHandler extends AbstractExecutionGraphRequestHandler {
 		return createJobExceptionsJson(graph);
 	}
 
+	/**
+	 * Archivist for the JobExceptionsHandler.
+	 */
 	public static class JobExceptionsJsonArchivist implements JsonArchivist {
 
 		@Override
@@ -69,14 +75,15 @@ public class JobExceptionsHandler extends AbstractExecutionGraphRequestHandler {
 
 	public static String createJobExceptionsJson(AccessExecutionGraph graph) throws IOException {
 		StringWriter writer = new StringWriter();
-		JsonGenerator gen = JsonFactory.jacksonFactory.createGenerator(writer);
+		JsonGenerator gen = JsonFactory.JACKSON_FACTORY.createGenerator(writer);
 
 		gen.writeStartObject();
-		
+
 		// most important is the root failure cause
-		String rootException = graph.getFailureCauseAsString();
-		if (rootException != null && !rootException.equals(ExceptionUtils.STRINGIFIED_NULL_EXCEPTION)) {
-			gen.writeStringField("root-exception", rootException);
+		ErrorInfo rootException = graph.getFailureCause();
+		if (rootException != null && !rootException.getExceptionAsString().equals(ExceptionUtils.STRINGIFIED_NULL_EXCEPTION)) {
+			gen.writeStringField("root-exception", rootException.getExceptionAsString());
+			gen.writeNumberField("timestamp", rootException.getTimestamp());
 		}
 
 		// we additionally collect all exceptions (up to a limit) that occurred in the individual tasks
@@ -84,7 +91,7 @@ public class JobExceptionsHandler extends AbstractExecutionGraphRequestHandler {
 
 		int numExceptionsSoFar = 0;
 		boolean truncated = false;
-		
+
 		for (AccessExecutionVertex task : graph.getAllExecutionVertices()) {
 			String t = task.getFailureCauseAsString();
 			if (t != null && !t.equals(ExceptionUtils.STRINGIFIED_NULL_EXCEPTION)) {
@@ -101,6 +108,8 @@ public class JobExceptionsHandler extends AbstractExecutionGraphRequestHandler {
 				gen.writeStringField("exception", t);
 				gen.writeStringField("task", task.getTaskNameWithSubtaskIndex());
 				gen.writeStringField("location", locationString);
+				long timestamp = task.getStateTimestamp(ExecutionState.FAILED);
+				gen.writeNumberField("timestamp", timestamp == 0 ? -1 : timestamp);
 				gen.writeEndObject();
 				numExceptionsSoFar++;
 			}

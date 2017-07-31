@@ -15,6 +15,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 package org.apache.flink.yarn;
 
 import org.apache.flink.api.common.JobSubmissionResult;
@@ -23,22 +24,19 @@ import org.apache.flink.client.program.ProgramInvocationException;
 import org.apache.flink.runtime.clusterframework.ApplicationStatus;
 import org.apache.flink.runtime.clusterframework.messages.GetClusterStatusResponse;
 import org.apache.flink.runtime.jobgraph.JobGraph;
+
 import org.apache.hadoop.yarn.api.records.ApplicationId;
-import org.apache.hadoop.yarn.api.records.ApplicationReport;
-import org.apache.hadoop.yarn.api.records.YarnApplicationState;
 import org.apache.hadoop.yarn.client.api.YarnClient;
-import org.apache.hadoop.yarn.client.api.YarnClientApplication;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.io.IOException;
 import java.net.InetSocketAddress;
 import java.net.URL;
 import java.util.List;
 
 /**
  * Java representation of a running Flink job on YARN.
- * Since flip-6, a flink job will be run as a yarn job by default, each job has a jobmaster, 
+ * Since flip-6, a flink job will be run as a yarn job by default, each job has a jobmaster,
  * so this class will be used as a client to communicate with yarn and start the job on yarn.
  */
 public class YarnClusterClientV2 extends ClusterClient {
@@ -58,11 +56,11 @@ public class YarnClusterClientV2 extends ClusterClient {
 	 *
 	 * @param clusterDescriptor The descriptor used to create yarn job
 	 * @param flinkConfig Flink configuration
-	 * @throws java.io.IOException
+	 * @throws Exception if the cluster client could not be created
 	 */
 	public YarnClusterClientV2(
 			final AbstractYarnClusterDescriptor clusterDescriptor,
-			org.apache.flink.configuration.Configuration flinkConfig) throws IOException {
+			org.apache.flink.configuration.Configuration flinkConfig) throws Exception {
 
 		super(flinkConfig);
 
@@ -78,7 +76,7 @@ public class YarnClusterClientV2 extends ClusterClient {
 
 	@Override
 	public int getMaxSlots() {
-        // Now need not set max slot
+        // No need not set max slot
 		return 0;
 	}
 
@@ -89,31 +87,13 @@ public class YarnClusterClientV2 extends ClusterClient {
 
 	@Override
 	protected JobSubmissionResult submitJob(JobGraph jobGraph, ClassLoader classLoader) throws ProgramInvocationException {
-		try {
-			// Create application via yarnClient
-			final YarnClientApplication yarnApplication = yarnClient.createApplication();
-			ApplicationReport report = this.clusterDescriptor.startAppMaster(jobGraph, yarnClient, yarnApplication);
-			if (report.getYarnApplicationState().equals(YarnApplicationState.RUNNING)) {
-				appId = report.getApplicationId();
-				trackingURL = report.getTrackingUrl();
-				logAndSysout("Please refer to " + getWebInterfaceURL() 
-						+ " for the running status of job " +  jobGraph.getJobID().toString());
-				//TODO: not support attach mode now
-				return new JobSubmissionResult(jobGraph.getJobID());
-			}
-			else {
-				throw new ProgramInvocationException("Fail to submit the job.");
-			}
-		}
-		catch (Exception e) {
-			throw new ProgramInvocationException("Fail to submit the job", e.getCause());
-		}
+		throw new UnsupportedOperationException("Not yet implemented.");
 	}
 
 	@Override
 	public String getWebInterfaceURL() {
 		// there seems to be a difference between HD 2.2.0 and 2.6.0
-		if(!trackingURL.startsWith("http://")) {
+		if (!trackingURL.startsWith("http://")) {
 			return "http://" + trackingURL;
 		} else {
 			return trackingURL;

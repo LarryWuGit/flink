@@ -20,12 +20,16 @@ package org.apache.flink.graph;
 
 import org.apache.flink.client.program.ProgramParametrizationException;
 import org.apache.flink.graph.drivers.DriverBaseITCase;
+
 import org.junit.Rule;
 import org.junit.Test;
 import org.junit.rules.ExpectedException;
 import org.junit.runner.RunWith;
 import org.junit.runners.Parameterized;
 
+/**
+ * Tests for {@link Runner}.
+ */
 @RunWith(Parameterized.class)
 public class RunnerITCase
 extends DriverBaseITCase {
@@ -33,8 +37,8 @@ extends DriverBaseITCase {
 	@Rule
 	public ExpectedException thrown = ExpectedException.none();
 
-	public RunnerITCase(TestExecutionMode mode) {
-		super(mode);
+	public RunnerITCase(String idType, TestExecutionMode mode) {
+		super(idType, mode);
 	}
 
 	@Test

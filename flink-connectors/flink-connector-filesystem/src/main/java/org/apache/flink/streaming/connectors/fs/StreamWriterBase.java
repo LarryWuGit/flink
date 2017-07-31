@@ -15,25 +15,29 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 package org.apache.flink.streaming.connectors.fs;
 
 import org.apache.flink.streaming.connectors.fs.bucketing.BucketingSink;
+
+import org.apache.hadoop.fs.FSDataOutputStream;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
-import org.apache.hadoop.fs.FSDataOutputStream;
+import org.apache.hadoop.hdfs.client.HdfsDataOutputStream;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
+import java.util.EnumSet;
 
 /**
  * Base class for {@link Writer Writers} that write to a {@link FSDataOutputStream}.
  */
 public abstract class StreamWriterBase<T> implements Writer<T> {
 
-	private static Logger LOG = LoggerFactory.getLogger(BucketingSink.class);
+	private static final Logger LOG = LoggerFactory.getLogger(BucketingSink.class);
 
 	/**
 	 * The {@code FSDataOutputStream} for the current part file.
@@ -59,23 +63,27 @@ public abstract class StreamWriterBase<T> implements Writer<T> {
 	/**
 	 * If hflush is available in this version of HDFS, then this method calls
 	 * hflush, else it calls sync.
+	 *
+	 * <p>Note: This code comes from Flume
+	 *
 	 * @param os - The stream to flush/sync
 	 * @throws java.io.IOException
-	 *
-	 * <p>
-	 * Note: This code comes from Flume
 	 */
 	protected void hflushOrSync(FSDataOutputStream os) throws IOException {
 		try {
 			// At this point the refHflushOrSync cannot be null,
 			// since register method would have thrown if it was.
 			this.refHflushOrSync.invoke(os);
+
+			if (os instanceof HdfsDataOutputStream) {
+				((HdfsDataOutputStream) os).hsync(EnumSet.of(HdfsDataOutputStream.SyncFlag.UPDATE_LENGTH));
+			}
 		} catch (InvocationTargetException e) {
 			String msg = "Error while trying to hflushOrSync!";
 			LOG.error(msg + " " + e.getCause());
 			Throwable cause = e.getCause();
-			if(cause != null && cause instanceof IOException) {
-				throw (IOException)cause;
+			if (cause != null && cause instanceof IOException) {
+				throw (IOException) cause;
 			}
 			throw new RuntimeException(msg, e);
 		} catch (Exception e) {
@@ -88,12 +96,11 @@ public abstract class StreamWriterBase<T> implements Writer<T> {
 	/**
 	 * Gets the hflush call using reflection. Fallback to sync if hflush is not available.
 	 *
-	 * <p>
-	 * Note: This code comes from Flume
+	 * <p>Note: This code comes from Flume
 	 */
 	private Method reflectHflushOrSync(FSDataOutputStream os) {
 		Method m = null;
-		if(os != null) {
+		if (os != null) {
 			Class<?> fsDataOutputStreamClass = os.getClass();
 			try {
 				m = fsDataOutputStreamClass.getMethod("hflush");

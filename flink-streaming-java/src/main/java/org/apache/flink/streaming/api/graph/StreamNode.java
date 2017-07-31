@@ -40,7 +40,7 @@ public class StreamNode implements Serializable {
 
 	private static final long serialVersionUID = 1L;
 
-	transient private StreamExecutionEnvironment env;
+	private transient StreamExecutionEnvironment env;
 
 	private final int id;
 	private Integer parallelism = null;
@@ -54,8 +54,8 @@ public class StreamNode implements Serializable {
 	private Long bufferTimeout = null;
 	private final String operatorName;
 	private String slotSharingGroup;
-	private KeySelector<?,?> statePartitioner1;
-	private KeySelector<?,?> statePartitioner2;
+	private KeySelector<?, ?> statePartitioner1;
+	private KeySelector<?, ?> statePartitioner2;
 	private TypeSerializer<?> stateKeySerializer;
 
 	private transient StreamOperator<?> operator;

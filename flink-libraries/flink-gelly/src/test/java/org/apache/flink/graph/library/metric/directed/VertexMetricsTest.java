@@ -18,16 +18,20 @@
 
 package org.apache.flink.graph.library.metric.directed;
 
-import org.apache.commons.math3.util.CombinatoricsUtils;
 import org.apache.flink.graph.asm.AsmTestBase;
 import org.apache.flink.graph.library.metric.directed.VertexMetrics.Result;
 import org.apache.flink.types.IntValue;
 import org.apache.flink.types.LongValue;
 import org.apache.flink.types.NullValue;
+
+import org.apache.commons.math3.util.CombinatoricsUtils;
 import org.junit.Test;
 
 import static org.junit.Assert.assertEquals;
 
+/**
+ * Tests for {@link VertexMetrics}.
+ */
 public class VertexMetricsTest
 extends AsmTestBase {
 
@@ -48,7 +52,7 @@ extends AsmTestBase {
 			throws Exception {
 		long expectedDegree = completeGraphVertexCount - 1;
 		long expectedBidirectionalEdges = completeGraphVertexCount * expectedDegree / 2;
-		long expectedMaximumTriplets = CombinatoricsUtils.binomialCoefficient((int)expectedDegree, 2);
+		long expectedMaximumTriplets = CombinatoricsUtils.binomialCoefficient((int) expectedDegree, 2);
 		long expectedTriplets = completeGraphVertexCount * expectedMaximumTriplets;
 
 		Result expectedResult = new Result(completeGraphVertexCount, 0, expectedBidirectionalEdges,
@@ -97,7 +101,7 @@ extends AsmTestBase {
 		Result expectedResult = new Result(902, 8875, 1567, 1003442, 463, 334, 342, 106953);
 
 		Result withoutZeroDegreeVertices = new VertexMetrics<LongValue, NullValue, NullValue>()
-			.run(directedRMatGraph)
+			.run(directedRMatGraph(10, 16))
 			.execute();
 
 		assertEquals(expectedResult, withoutZeroDegreeVertices);

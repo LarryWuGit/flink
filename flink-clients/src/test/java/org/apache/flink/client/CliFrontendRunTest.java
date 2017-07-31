@@ -16,7 +16,6 @@
  * limitations under the License.
  */
 
-
 package org.apache.flink.client;
 
 import org.apache.flink.client.cli.CliFrontendParser;
@@ -24,6 +23,7 @@ import org.apache.flink.client.cli.RunOptions;
 import org.apache.flink.client.program.ClusterClient;
 import org.apache.flink.client.program.PackagedProgram;
 import org.apache.flink.runtime.jobgraph.SavepointRestoreSettings;
+
 import org.junit.BeforeClass;
 import org.junit.Test;
 
@@ -34,14 +34,16 @@ import static org.junit.Assert.assertNotEquals;
 import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
 
-
+/**
+ * Tests for the RUN command.
+ */
 public class CliFrontendRunTest {
-	
+
 	@BeforeClass
 	public static void init() {
 		CliFrontendTestUtils.pipeSystemOutToNull();
 	}
-	
+
 	@Test
 	public void testRun() {
 		try {
@@ -56,7 +58,7 @@ public class CliFrontendRunTest {
 			// test without parallelism
 			{
 				String[] parameters = {"-v", getTestJarPath()};
-				RunTestingCliFrontend testFrontend = new RunTestingCliFrontend(-1, true, false);
+				RunTestingCliFrontend testFrontend = new RunTestingCliFrontend(1, true, false);
 				assertEquals(0, testFrontend.run(parameters));
 			}
 
@@ -135,7 +137,7 @@ public class CliFrontendRunTest {
 
 	// --------------------------------------------------------------------------------------------
 
-	public static final class RunTestingCliFrontend extends CliFrontend {
+	private static final class RunTestingCliFrontend extends CliFrontend {
 
 		private final int expectedParallelism;
 		private final boolean sysoutLogging;

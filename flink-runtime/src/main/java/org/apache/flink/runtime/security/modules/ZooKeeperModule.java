@@ -15,6 +15,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 package org.apache.flink.runtime.security.modules;
 
 import org.apache.flink.runtime.security.SecurityUtils;
@@ -41,12 +42,17 @@ public class ZooKeeperModule implements SecurityModule {
 	 */
 	private static final String ZK_LOGIN_CONTEXT_NAME = "zookeeper.sasl.clientconfig";
 
+	private String priorSaslEnable;
+
 	private String priorServiceName;
 
 	private String priorLoginContextName;
 
 	@Override
 	public void install(SecurityUtils.SecurityConfiguration configuration) throws SecurityInstallException {
+
+		priorSaslEnable = System.getProperty(ZK_ENABLE_CLIENT_SASL, null);
+		System.setProperty(ZK_ENABLE_CLIENT_SASL, String.valueOf(!configuration.isZkSaslDisable()));
 
 		priorServiceName = System.getProperty(ZK_SASL_CLIENT_USERNAME, null);
 		if (!"zookeeper".equals(configuration.getZooKeeperServiceName())) {
@@ -61,12 +67,17 @@ public class ZooKeeperModule implements SecurityModule {
 
 	@Override
 	public void uninstall() throws SecurityInstallException {
-		if(priorServiceName != null) {
+		if (priorSaslEnable != null) {
+			System.setProperty(ZK_ENABLE_CLIENT_SASL, priorSaslEnable);
+		} else {
+			System.clearProperty(ZK_ENABLE_CLIENT_SASL);
+		}
+		if (priorServiceName != null) {
 			System.setProperty(ZK_SASL_CLIENT_USERNAME, priorServiceName);
 		} else {
 			System.clearProperty(ZK_SASL_CLIENT_USERNAME);
 		}
-		if(priorLoginContextName != null) {
+		if (priorLoginContextName != null) {
 			System.setProperty(ZK_LOGIN_CONTEXT_NAME, priorLoginContextName);
 		} else {
 			System.clearProperty(ZK_LOGIN_CONTEXT_NAME);

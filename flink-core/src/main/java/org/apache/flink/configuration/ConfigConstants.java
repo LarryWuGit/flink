@@ -113,7 +113,7 @@ public final class ConfigConstants {
 	public static final String EXECUTION_RETRY_DELAY_KEY = "execution-retries.delay";
 	
 	// -------------------------------- Runtime -------------------------------
-	
+
 	/**
 	 * The config parameter defining the network address to connect to
 	 * for communication with the job manager.
@@ -139,36 +139,39 @@ public final class ConfigConstants {
 	public static final String RESOURCE_MANAGER_IPC_PORT_KEY = "resourcemanager.rpc.port";
 
 	/**
-	 * The config parameter defining the storage directory to be used by the blob server.
+	 * @deprecated use {@link BlobServerOptions#STORAGE_DIRECTORY} instead
 	 */
+	@Deprecated
 	public static final String BLOB_STORAGE_DIRECTORY_KEY = "blob.storage.directory";
 
 	/**
-	 * The config parameter defining number of retires for failed BLOB fetches.
+	 * @deprecated use {@link BlobServerOptions#FETCH_RETRIES} instead
 	 */
+	@Deprecated
 	public static final String BLOB_FETCH_RETRIES_KEY = "blob.fetch.retries";
 
 	/**
-	 * The config parameter defining the maximum number of concurrent BLOB fetches that the JobManager serves.
+	 * @deprecated use {@link BlobServerOptions#FETCH_CONCURRENT} instead
 	 */
+	@Deprecated
 	public static final String BLOB_FETCH_CONCURRENT_KEY = "blob.fetch.num-concurrent";
 
 	/**
-	 * The config parameter defining the backlog of BLOB fetches on the JobManager
+	 * @deprecated use {@link BlobServerOptions#FETCH_BACKLOG} instead
 	 */
+	@Deprecated
 	public static final String BLOB_FETCH_BACKLOG_KEY = "blob.fetch.backlog";
 
 	/**
-	 * The config parameter defining the server port of the blob service.
-	 * The port can either be a port, such as "9123",
-	 * a range of ports: "50100-50200"
-	 * or a list of ranges and or points: "50100-50200,50300-50400,51234"
-	 *
-	 * Setting the port to 0 will let the OS choose an available port.
+	 * @deprecated use {@link BlobServerOptions#PORT} instead
 	 */
+	@Deprecated
 	public static final String BLOB_SERVER_PORT = "blob.server.port";
 
-	/** Flag to override ssl support for the blob service transport */
+	/**
+	 * @deprecated use {@link BlobServerOptions#SSL_ENABLED} instead
+	 */
+	@Deprecated
 	public static final String BLOB_SERVICE_SSL_ENABLED = "blob.service.ssl.enabled";
 
 	/**
@@ -182,8 +185,9 @@ public final class ConfigConstants {
 	public static final String TASK_MANAGER_HOSTNAME_KEY = "taskmanager.hostname";
 
 	/**
-	 * The config parameter defining the task manager's IPC port from the configuration.
+	 * @deprecated use {@link TaskManagerOptions#RPC_PORT} instead
 	 */
+	@Deprecated
 	public static final String TASK_MANAGER_IPC_PORT_KEY = "taskmanager.rpc.port";
 
 	/**
@@ -705,116 +709,186 @@ public final class ConfigConstants {
 
 	/**
 	 * Timeout for the startup of the actor system
+	 *
+	 * @deprecated Use {@link AkkaOptions#STARTUP_TIMEOUT} instead.
 	 */
+	@Deprecated
 	public static final String AKKA_STARTUP_TIMEOUT = "akka.startup-timeout";
 
 	/**
 	 * Heartbeat interval of the transport failure detector
+	 *
+	 * @deprecated Use {@link AkkaOptions#TRANSPORT_HEARTBEAT_INTERVAL} instead.
 	 */
+	@Deprecated
 	public static final String AKKA_TRANSPORT_HEARTBEAT_INTERVAL = "akka.transport.heartbeat.interval";
 
 	/**
 	 * Allowed heartbeat pause for the transport failure detector
+	 *
+	 * @deprecated Use {@link AkkaOptions#TRANSPORT_HEARTBEAT_PAUSE} instead.
 	 */
+	@Deprecated
 	public static final String AKKA_TRANSPORT_HEARTBEAT_PAUSE = "akka.transport.heartbeat.pause";
 
 	/**
 	 * Detection threshold of transport failure detector
+	 *
+	 * @deprecated Use {@link AkkaOptions#TRANSPORT_THRESHOLD} instead.
 	 */
+	@Deprecated
 	public static final String AKKA_TRANSPORT_THRESHOLD = "akka.transport.threshold";
 
 	/**
 	 * Heartbeat interval of watch failure detector
+	 *
+	 * @deprecated Use {@link AkkaOptions#WATCH_HEARTBEAT_INTERVAL} instead.
 	 */
+	@Deprecated
 	public static final String AKKA_WATCH_HEARTBEAT_INTERVAL = "akka.watch.heartbeat.interval";
 
 	/**
 	 * Allowed heartbeat pause for the watch failure detector
+	 *
+	 * @deprecated Use {@link AkkaOptions#WATCH_HEARTBEAT_PAUSE} instead.
 	 */
+	@Deprecated
 	public static final String AKKA_WATCH_HEARTBEAT_PAUSE = "akka.watch.heartbeat.pause";
 
 	/**
 	 * Detection threshold for the phi accrual watch failure detector
+	 *
+	 * @deprecated Use {@link AkkaOptions#WATCH_THRESHOLD} instead.
 	 */
+	@Deprecated
 	public static final String AKKA_WATCH_THRESHOLD = "akka.watch.threshold";
 
 	/**
 	 * Akka TCP timeout
+	 *
+	 * @deprecated Use {@link AkkaOptions#TCP_TIMEOUT} instead.
 	 */
+	@Deprecated
 	public static final String AKKA_TCP_TIMEOUT = "akka.tcp.timeout";
 
 	/**
 	 * Override SSL support for the Akka transport
+	 *
+	 * @deprecated Use {@link AkkaOptions#SSL_ENABLED} instead.
 	 */
+	@Deprecated
 	public static final String AKKA_SSL_ENABLED = "akka.ssl.enabled";
 
 	/**
 	 * Maximum framesize of akka messages
+	 *
+	 * @deprecated Use {@link AkkaOptions#FRAMESIZE} instead.
 	 */
+	@Deprecated
 	public static final String AKKA_FRAMESIZE = "akka.framesize";
 
 	/**
 	 * Maximum number of messages until another actor is executed by the same thread
+	 *
+	 * @deprecated Use {@link AkkaOptions#DISPATCHER_THROUGHPUT} instead.
 	 */
+	@Deprecated
 	public static final String AKKA_DISPATCHER_THROUGHPUT = "akka.throughput";
 
 	/**
 	 * Log lifecycle events
+	 *
+	 * @deprecated Use {@link AkkaOptions#LOG_LIFECYCLE_EVENTS} instead.
 	 */
+	@Deprecated
 	public static final String AKKA_LOG_LIFECYCLE_EVENTS = "akka.log.lifecycle.events";
 
 	/**
 	 * Timeout for all blocking calls on the cluster side
+	 *
+	 * @deprecated Use {@link AkkaOptions#ASK_TIMEOUT} instead.
 	 */
+	@Deprecated
 	public static final String AKKA_ASK_TIMEOUT = "akka.ask.timeout";
 
 	/**
 	 * Timeout for all blocking calls that look up remote actors
+	 *
+	 * @deprecated Use {@link AkkaOptions#LOOKUP_TIMEOUT} instead.
 	 */
+	@Deprecated
 	public static final String AKKA_LOOKUP_TIMEOUT = "akka.lookup.timeout";
 
 	/**
 	 * Timeout for all blocking calls on the client side
+	 *
+	 * @deprecated Use {@link AkkaOptions#CLIENT_TIMEOUT} instead.
 	 */
+	@Deprecated
 	public static final String AKKA_CLIENT_TIMEOUT = "akka.client.timeout";
 
 	/**
 	 * Exit JVM on fatal Akka errors
+	 *
+	 * @deprecated Use {@link AkkaOptions#JVM_EXIT_ON_FATAL_ERROR} instead.
 	 */
+	@Deprecated
 	public static final String AKKA_JVM_EXIT_ON_FATAL_ERROR = "akka.jvm-exit-on-fatal-error";
 	
 	// ----------------------------- Transport SSL Settings--------------------
 
 	/**
-	 * Enable SSL support
+	 * @deprecated use {@link SecurityOptions#SSL_ENABLED} instead
 	 */
+	@Deprecated
 	public static final String SECURITY_SSL_ENABLED = "security.ssl.enabled";
 
-	/** The Java keystore file containing the flink endpoint key and certificate */
+	/**
+	 * @deprecated use {@link SecurityOptions#SSL_KEYSTORE} instead
+	 */
+	@Deprecated
 	public static final String SECURITY_SSL_KEYSTORE = "security.ssl.keystore";
 
-	/** secret to decrypt the keystore file */
+	/**
+	 * @deprecated use {@link SecurityOptions#SSL_KEYSTORE_PASSWORD} instead
+	 */
+	@Deprecated
 	public static final String SECURITY_SSL_KEYSTORE_PASSWORD = "security.ssl.keystore-password";
 
-	/** secret to decrypt the server key */
+	/**
+	 * @deprecated use {@link SecurityOptions#SSL_KEY_PASSWORD} instead
+	 */
+	@Deprecated
 	public static final String SECURITY_SSL_KEY_PASSWORD = "security.ssl.key-password";
 
-	/** The truststore file containing the public CA certificates to verify the ssl peers */
+	/**
+	 * @deprecated use {@link SecurityOptions#SSL_TRUSTSTORE} instead
+	 */
+	@Deprecated
 	public static final String SECURITY_SSL_TRUSTSTORE = "security.ssl.truststore";
 
-	/** Secret to decrypt the truststore */
+	/**
+	 * @deprecated use {@link SecurityOptions#SSL_TRUSTSTORE_PASSWORD} instead
+	 */
+	@Deprecated
 	public static final String SECURITY_SSL_TRUSTSTORE_PASSWORD = "security.ssl.truststore-password";
 
-	/** SSL protocol version to be supported */
+	/**
+	 * @deprecated use {@link SecurityOptions#SSL_PROTOCOL} instead
+	 */
+	@Deprecated
 	public static final String SECURITY_SSL_PROTOCOL = "security.ssl.protocol";
 
 	/**
-	 * The standard SSL algorithms to be supported
-	 * More options here - http://docs.oracle.com/javase/8/docs/technotes/guides/security/StandardNames.html#ciphersuites
-	 * */
+	 * @deprecated use {@link SecurityOptions#SSL_ALGORITHMS} instead
+	 */
+	@Deprecated
 	public static final String SECURITY_SSL_ALGORITHMS = "security.ssl.algorithms";
 
-	/** Flag to enable/disable hostname verification for the ssl connections */
+	/**
+	 * @deprecated use {@link SecurityOptions#SSL_VERIFY_HOSTNAME} instead
+	 */
+	@Deprecated
 	public static final String SECURITY_SSL_VERIFY_HOSTNAME = "security.ssl.verify-hostname";
 
 	// ----------------------------- Streaming --------------------------------
@@ -871,65 +945,111 @@ public final class ConfigConstants {
 
 	// --------------------------- ZooKeeper ----------------------------------
 
-	/** ZooKeeper servers. */
+	/**
+	 * ZooKeeper servers.
+	 * @deprecated in favor of {@link HighAvailabilityOptions#HA_ZOOKEEPER_QUORUM}.
+	 */
 	@PublicEvolving
+	@Deprecated
 	public static final String HA_ZOOKEEPER_QUORUM_KEY = "high-availability.zookeeper.quorum";
 
 	/**
 	 * File system state backend base path for recoverable state handles. Recovery state is written
 	 * to this path and the file state handles are persisted for recovery.
+	 * @deprecated in favor of {@link HighAvailabilityOptions#HA_STORAGE_PATH}.
 	 */
 	@PublicEvolving
+	@Deprecated
 	public static final String HA_ZOOKEEPER_STORAGE_PATH = "high-availability.zookeeper.storageDir";
 
-	/** ZooKeeper root path. */
+	/**
+	 * ZooKeeper root path.
+	 * @deprecated in favor of {@link HighAvailabilityOptions#HA_ZOOKEEPER_ROOT}.
+	 */
 	@PublicEvolving
+	@Deprecated
 	public static final String HA_ZOOKEEPER_DIR_KEY = "high-availability.zookeeper.path.root";
 
+	/** @deprecated in favor of {@link HighAvailabilityOptions#HA_ZOOKEEPER_NAMESPACE}. */
 	@PublicEvolving
+	@Deprecated
 	public static final String HA_ZOOKEEPER_NAMESPACE_KEY = "high-availability.zookeeper.path.namespace";
 
+	/** @deprecated in favor of {@link HighAvailabilityOptions#HA_ZOOKEEPER_LATCH_PATH}. */
 	@PublicEvolving
+	@Deprecated
 	public static final String HA_ZOOKEEPER_LATCH_PATH = "high-availability.zookeeper.path.latch";
 
-	/** ZooKeeper root path (ZNode) for job graphs. */
+	/**
+	 * ZooKeeper root path (ZNode) for job graphs.
+	 * @deprecated in favor of {@link HighAvailabilityOptions#HA_ZOOKEEPER_JOBGRAPHS_PATH}.
+	 */
 	@PublicEvolving
+	@Deprecated
 	public static final String HA_ZOOKEEPER_JOBGRAPHS_PATH = "high-availability.zookeeper.path.jobgraphs";
 
+	/** @deprecated in favor of {@link HighAvailabilityOptions#HA_ZOOKEEPER_LEADER_PATH}. */
 	@PublicEvolving
+	@Deprecated
 	public static final String HA_ZOOKEEPER_LEADER_PATH = "high-availability.zookeeper.path.leader";
 
-	/** ZooKeeper root path (ZNode) for completed checkpoints. */
+	/**
+	 * ZooKeeper root path (ZNode) for completed checkpoints.
+	 * @deprecated in favor of {@link HighAvailabilityOptions#HA_ZOOKEEPER_CHECKPOINTS_PATH}.
+	 */
 	@PublicEvolving
+	@Deprecated
 	public static final String HA_ZOOKEEPER_CHECKPOINTS_PATH = "high-availability.zookeeper.path.checkpoints";
 
-	/** ZooKeeper root path (ZNode) for checkpoint counters. */
+	/**
+	 * ZooKeeper root path (ZNode) for checkpoint counters.
+	 * @deprecated in favor of {@link HighAvailabilityOptions#HA_ZOOKEEPER_CHECKPOINT_COUNTER_PATH}.
+	 */
 	@PublicEvolving
+	@Deprecated
 	public static final String HA_ZOOKEEPER_CHECKPOINT_COUNTER_PATH = "high-availability.zookeeper.path.checkpoint-counter";
 
-	/** ZooKeeper root path (ZNode) for Mesos workers. */
+	/**
+	 * ZooKeeper root path (ZNode) for Mesos workers.
+	 * @deprecated in favor of {@link HighAvailabilityOptions#HA_ZOOKEEPER_MESOS_WORKERS_PATH}.
+	 */
 	@PublicEvolving
+	@Deprecated
 	public static final String HA_ZOOKEEPER_MESOS_WORKERS_PATH = "high-availability.zookeeper.path.mesos-workers";
 
+	/** @deprecated in favor of {@link HighAvailabilityOptions#ZOOKEEPER_SESSION_TIMEOUT}. */
 	@PublicEvolving
+	@Deprecated
 	public static final String HA_ZOOKEEPER_SESSION_TIMEOUT = "high-availability.zookeeper.client.session-timeout";
 
+	/** @deprecated in favor of {@link HighAvailabilityOptions#ZOOKEEPER_CONNECTION_TIMEOUT}. */
 	@PublicEvolving
+	@Deprecated
 	public static final String HA_ZOOKEEPER_CONNECTION_TIMEOUT = "high-availability.zookeeper.client.connection-timeout";
 
+	/** @deprecated in favor of {@link HighAvailabilityOptions#ZOOKEEPER_RETRY_WAIT} */
 	@PublicEvolving
+	@Deprecated
 	public static final String HA_ZOOKEEPER_RETRY_WAIT = "high-availability.zookeeper.client.retry-wait";
 
+	/** @deprecated in favor of {@link HighAvailabilityOptions#ZOOKEEPER_MAX_RETRY_ATTEMPTS}. */
 	@PublicEvolving
+	@Deprecated
 	public static final String HA_ZOOKEEPER_MAX_RETRY_ATTEMPTS = "high-availability.zookeeper.client.max-retry-attempts";
 
+	/** @deprecated in favor of {@link HighAvailabilityOptions#ZOOKEEPER_CLIENT_ACL}. */
 	@PublicEvolving
+	@Deprecated
 	public static final String HA_ZOOKEEPER_CLIENT_ACL = "high-availability.zookeeper.client.acl";
 
+	/** @deprecated in favor of {@link SecurityOptions#ZOOKEEPER_SASL_DISABLE}. */
 	@PublicEvolving
+	@Deprecated
 	public static final String ZOOKEEPER_SASL_DISABLE = "zookeeper.sasl.disable";
 
+	/** @deprecated in favor of {@link SecurityOptions#ZOOKEEPER_SASL_SERVICE_NAME}. */
 	@PublicEvolving
+	@Deprecated
 	public static final String ZOOKEEPER_SASL_SERVICE_NAME = "zookeeper.sasl.service-name";
 
 	/** @deprecated Deprecated in favour of {@link #HA_ZOOKEEPER_QUORUM_KEY}. */
@@ -990,21 +1110,8 @@ public final class ConfigConstants {
 
 	// ---------------------------- Metrics -----------------------------------
 
-	/**
-	 * The list of named reporters. Names are defined here and per-reporter configs
-	 * are given with the reporter config prefix and the reporter name.
-	 *
-	 * Example:
-	 * <pre>{@code
-	 * metrics.reporters = foo, bar
-	 *
-	 * metrics.reporter.foo.class = org.apache.flink.metrics.reporter.JMXReporter
-	 * metrics.reporter.foo.interval = 10
-	 *
-	 * metrics.reporter.bar.class = org.apache.flink.metrics.graphite.GraphiteReporter
-	 * metrics.reporter.bar.port = 1337
-	 * }</pre>
-	 */
+	/** @deprecated Use {@link MetricOptions#REPORTERS_LIST} instead. */
+	@Deprecated
 	public static final String METRICS_REPORTERS_LIST = "metrics.reporters";
 
 	/**
@@ -1022,45 +1129,61 @@ public final class ConfigConstants {
 	/**	The delimiter used to assemble the metric identifier. This is used as a suffix in an actual reporter config. */
 	public static final String METRICS_REPORTER_SCOPE_DELIMITER = "scope.delimiter";
 
-	/** The delimiter used to assemble the metric identifier. */
+	/** @deprecated Use {@link MetricOptions#SCOPE_DELIMITER} instead. */
+	@Deprecated
 	public static final String METRICS_SCOPE_DELIMITER = "metrics.scope.delimiter";
 
-	/** The scope format string that is applied to all metrics scoped to a JobManager. */
+	/** @deprecated Use {@link MetricOptions#SCOPE_NAMING_JM} instead. */
+	@Deprecated
 	public static final String METRICS_SCOPE_NAMING_JM = "metrics.scope.jm";
 
-	/** The scope format string that is applied to all metrics scoped to a TaskManager. */
+	/** @deprecated Use {@link MetricOptions#SCOPE_NAMING_TM} instead. */
+	@Deprecated
 	public static final String METRICS_SCOPE_NAMING_TM = "metrics.scope.tm";
 
-	/** The scope format string that is applied to all metrics scoped to a job on a JobManager. */
+	/** @deprecated Use {@link MetricOptions#SCOPE_NAMING_JM_JOB} instead. */
+	@Deprecated
 	public static final String METRICS_SCOPE_NAMING_JM_JOB = "metrics.scope.jm.job";
 
-	/** The scope format string that is applied to all metrics scoped to a job on a TaskManager. */
+	/** @deprecated Use {@link MetricOptions#SCOPE_NAMING_TM_JOB} instead. */
+	@Deprecated
 	public static final String METRICS_SCOPE_NAMING_TM_JOB = "metrics.scope.tm.job";
 
-	/** The scope format string that is applied to all metrics scoped to a task. */
+	/** @deprecated Use {@link MetricOptions#SCOPE_NAMING_TASK} instead. */
+	@Deprecated
 	public static final String METRICS_SCOPE_NAMING_TASK = "metrics.scope.task";
 
-	/** The scope format string that is applied to all metrics scoped to an operator. */
+	/** @deprecated Use {@link MetricOptions#SCOPE_NAMING_OPERATOR} instead. */
+	@Deprecated
 	public static final String METRICS_SCOPE_NAMING_OPERATOR = "metrics.scope.operator";
 
-	/** The number of measured latencies to maintain at each operator */
+	/** @deprecated Use {@link MetricOptions#LATENCY_HISTORY_SIZE} instead. */
+	@Deprecated
 	public static final String METRICS_LATENCY_HISTORY_SIZE = "metrics.latency.history-size";
 
 
 	// ---------------------------- Checkpoints -------------------------------
 
-	/** The default directory for savepoints. */
+	/**
+	 * The default directory for savepoints.
+	 * @deprecated Use {@link CoreOptions#SAVEPOINT_DIRECTORY} instead.
+	 */
 	@PublicEvolving
+	@Deprecated
 	public static final String SAVEPOINT_DIRECTORY_KEY = "state.savepoints.dir";
 
-	/** The default directory used for persistent checkpoints. */
+	/**
+	 * The default directory used for persistent checkpoints.
+	 * @deprecated Use {@link CoreOptions#CHECKPOINTS_DIRECTORY} instead.
+	 */
 	@PublicEvolving
+	@Deprecated
 	public static final String CHECKPOINTS_DIRECTORY_KEY = "state.checkpoints.dir";
 
 	/**
 	 * @deprecated This key was used in Flink versions <= 1.1.X with the savepoint backend
 	 * configuration. We now always use the FileSystem for savepoints. For this,
-	 * the only relevant config key is {@link #SAVEPOINT_DIRECTORY_KEY}.
+	 * the only relevant config key is {@link CoreOptions#SAVEPOINT_DIRECTORY}.
 	 */
 	@Deprecated
 	public static final String SAVEPOINT_FS_DIRECTORY_KEY = "savepoints.state.backend.fs.dir";
@@ -1099,34 +1222,39 @@ public final class ConfigConstants {
 	public static final int DEFAULT_RESOURCE_MANAGER_IPC_PORT = 0;
 
 	/**
-	 * The default value to override ssl support for blob service transport
+	 * @deprecated use {@link BlobServerOptions#SSL_ENABLED} instead
 	 */
+	@Deprecated
 	public static final boolean DEFAULT_BLOB_SERVICE_SSL_ENABLED = true;
 
 	/**
-	 * Default number of retries for failed BLOB fetches.
+	 * @deprecated use {@link BlobServerOptions#FETCH_RETRIES} instead
 	 */
+	@Deprecated
 	public static final int DEFAULT_BLOB_FETCH_RETRIES = 5;
 
 	/**
-	 * Default number of concurrent BLOB fetch operations.
+	 * @deprecated use {@link BlobServerOptions#FETCH_CONCURRENT} instead
 	 */
+	@Deprecated
 	public static final int DEFAULT_BLOB_FETCH_CONCURRENT = 50;
 
 	/**
-	 * Default BLOB fetch connection backlog.
+	 * @deprecated use {@link BlobServerOptions#FETCH_BACKLOG} instead
 	 */
+	@Deprecated
 	public static final int DEFAULT_BLOB_FETCH_BACKLOG = 1000;
 
 	/**
-	 * Default BLOB server port. 0 means ephemeral port.
+	 * @deprecated use {@link BlobServerOptions#PORT} instead
 	 */
+	@Deprecated
 	public static final String DEFAULT_BLOB_SERVER_PORT = "0";
 
 	/**
-	 * The default network port the task manager expects incoming IPC connections. The {@code 0} means that
-	 * the TaskManager searches for a free port.
+	 * @deprecated use {@link TaskManagerOptions#RPC_PORT} instead
 	 */
+	@Deprecated
 	public static final int DEFAULT_TASK_MANAGER_IPC_PORT = 0;
 
 	/**
@@ -1333,75 +1461,185 @@ public final class ConfigConstants {
 	
 	// ------------------------- JobManager Web Frontend ----------------------
 
-	/** The config key for the address of the JobManager web frontend. */
+	/**
+	 * The config key for the address of the JobManager web frontend.
+	 *
+	 * @deprecated use {@link JobManagerOptions#WEB_FRONTEND_ADDRESS} instead
+	 */
+	@Deprecated
 	public static final ConfigOption<String> DEFAULT_JOB_MANAGER_WEB_FRONTEND_ADDRESS =
 		key("jobmanager.web.address")
 			.noDefaultValue();
 
-	/** The config key for the port of the JobManager web frontend.
-	 * Setting this value to {@code -1} disables the web frontend. */
+	/**
+	 * The config key for the port of the JobManager web frontend.
+	 * Setting this value to {@code -1} disables the web frontend.
+	 *
+	 * @deprecated use {@link JobManagerOptions#WEB_PORT} instead
+	 */
+	@Deprecated
 	public static final int DEFAULT_JOB_MANAGER_WEB_FRONTEND_PORT = 8081;
 
-	/** Default value to override SSL support for the JobManager web UI */
+	/**
+	 * Default value to override SSL support for the JobManager web UI
+	 *
+	 * @deprecated use {@link JobManagerOptions#WEB_SSL_ENABLED} instead
+	 */
+	@Deprecated
 	public static final boolean DEFAULT_JOB_MANAGER_WEB_SSL_ENABLED = true;
 
-	/** The default number of archived jobs for the jobmanager */
+	/**
+	 * The default number of archived jobs for the jobmanager
+	 *
+	 * @deprecated use {@link JobManagerOptions#WEB_ARCHIVE_COUNT} instead
+	 */
+	@Deprecated
 	public static final int DEFAULT_JOB_MANAGER_WEB_ARCHIVE_COUNT = 5;
 
-	/** By default, submitting jobs from the web-frontend is allowed. */
+	/**
+	 * By default, submitting jobs from the web-frontend is allowed.
+	 *
+	 * @deprecated use {@link JobManagerOptions#WEB_SUBMIT_ENABLE} instead
+	 */
+	@Deprecated
 	public static final boolean DEFAULT_JOB_MANAGER_WEB_SUBMIT_ENABLED = true;
 
 	/** @deprecated Config key has been deprecated. Therefore, no default value required. */
 	@Deprecated
 	public static final boolean DEFAULT_JOB_MANAGER_WEB_CHECKPOINTS_DISABLE = false;
 
-	/** Default number of checkpoints to remember for recent history. */
+	/**
+	 * Default number of checkpoints to remember for recent history.
+	 *
+	 * @deprecated use {@link JobManagerOptions#WEB_CHECKPOINTS_HISTORY_SIZE} instead
+	 */
+	@Deprecated
 	public static final int DEFAULT_JOB_MANAGER_WEB_CHECKPOINTS_HISTORY_SIZE = 10;
 
-	/** Time after which cached stats are cleaned up. */
+	/**
+	 * Time after which cached stats are cleaned up.
+	 *
+	 * @deprecated use {@link JobManagerOptions#WEB_BACKPRESSURE_CLEANUP_INTERVAL} instead
+	 */
+	@Deprecated
 	public static final int DEFAULT_JOB_MANAGER_WEB_BACK_PRESSURE_CLEAN_UP_INTERVAL = 10 * 60 * 1000;
 
-	/** Time after which available stats are deprecated and need to be refreshed (by resampling). */
+	/**
+	 * Time after which available stats are deprecated and need to be refreshed (by resampling).
+	 *
+	 * @deprecated use {@link JobManagerOptions#WEB_BACKPRESSURE_REFRESH_INTERVAL} instead
+	 */
+	@Deprecated
 	public static final int DEFAULT_JOB_MANAGER_WEB_BACK_PRESSURE_REFRESH_INTERVAL = 60 * 1000;
 
-	/** Number of samples to take to determine back pressure. */
+	/**
+	 * Number of samples to take to determine back pressure.
+	 *
+	 * @deprecated use {@link JobManagerOptions#WEB_BACKPRESSURE_NUM_SAMPLES} instead
+	 */
+	@Deprecated
 	public static final int DEFAULT_JOB_MANAGER_WEB_BACK_PRESSURE_NUM_SAMPLES = 100;
 
-	/** Delay between samples to determine back pressure. */
+	/**
+	 * Delay between samples to determine back pressure.
+	 *
+	 * @deprecated use {@link JobManagerOptions#WEB_BACKPRESSURE_DELAY} instead
+	 */
+	@Deprecated
 	public static final int DEFAULT_JOB_MANAGER_WEB_BACK_PRESSURE_DELAY = 50;
 
 	// ------------------------------ Akka Values ------------------------------
 
+	/**
+	 * @deprecated Use {@link AkkaOptions#TRANSPORT_HEARTBEAT_INTERVAL} instead.
+	 */
+	@Deprecated
 	public static String DEFAULT_AKKA_TRANSPORT_HEARTBEAT_INTERVAL = "1000 s";
 
+	/**
+	 * @deprecated Use {@link AkkaOptions#TRANSPORT_HEARTBEAT_PAUSE} instead.
+	 */
+	@Deprecated
 	public static String DEFAULT_AKKA_TRANSPORT_HEARTBEAT_PAUSE = "6000 s";
 
+	/**
+	 * @deprecated Use {@link AkkaOptions#TRANSPORT_THRESHOLD} instead.
+	 */
+	@Deprecated
 	public static double DEFAULT_AKKA_TRANSPORT_THRESHOLD = 300.0;
 
+	/**
+	 * @deprecated Use {@link AkkaOptions#WATCH_THRESHOLD} instead.
+	 */
+	@Deprecated
 	public static double DEFAULT_AKKA_WATCH_THRESHOLD = 12;
 
+	/**
+	 * @deprecated Use {@link AkkaOptions#DISPATCHER_THROUGHPUT} instead.
+	 */
+	@Deprecated
 	public static int DEFAULT_AKKA_DISPATCHER_THROUGHPUT = 15;
 
+	/**
+	 * @deprecated Use {@link AkkaOptions#LOG_LIFECYCLE_EVENTS} instead.
+	 */
+	@Deprecated
 	public static boolean DEFAULT_AKKA_LOG_LIFECYCLE_EVENTS = false;
 
+	/**
+	 * @deprecated Use {@link AkkaOptions#FRAMESIZE} instead.
+	 */
+	@Deprecated
 	public static String DEFAULT_AKKA_FRAMESIZE = "10485760b";
 
+	/**
+	 * @deprecated Use {@link AkkaOptions#ASK_TIMEOUT} instead.
+	 */
+	@Deprecated
 	public static String DEFAULT_AKKA_ASK_TIMEOUT = "10 s";
 
+	/**
+	 * @deprecated Use {@link AkkaOptions#LOOKUP_TIMEOUT} instead.
+	 */
+	@Deprecated
 	public static String DEFAULT_AKKA_LOOKUP_TIMEOUT = "10 s";
 
+	/**
+	 * @deprecated Use {@link AkkaOptions#CLIENT_TIMEOUT} instead.
+	 */
+	@Deprecated
 	public static String DEFAULT_AKKA_CLIENT_TIMEOUT = "60 s";
 
+	/**
+	 * @deprecated Use {@link AkkaOptions#SSL_ENABLED} instead.
+	 */
+	@Deprecated
 	public static boolean DEFAULT_AKKA_SSL_ENABLED = true;
 
 	// ----------------------------- SSL Values --------------------------------
 
+	/**
+	 * @deprecated use {@link SecurityOptions#SSL_ENABLED} instead
+	 */
+	@Deprecated
 	public static boolean DEFAULT_SECURITY_SSL_ENABLED = false;
 
+	/**
+	 * @deprecated use {@link SecurityOptions#SSL_PROTOCOL} instead
+	 */
+	@Deprecated
 	public static String DEFAULT_SECURITY_SSL_PROTOCOL = "TLSv1.2";
 
+	/**
+	 * @deprecated use {@link SecurityOptions#SSL_ALGORITHMS} instead
+	 */
+	@Deprecated
 	public static String DEFAULT_SECURITY_SSL_ALGORITHMS = "TLS_RSA_WITH_AES_128_CBC_SHA";
 
+	/**
+	 * @deprecated use {@link SecurityOptions#SSL_VERIFY_HOSTNAME} instead
+	 */
+	@Deprecated
 	public static boolean DEFAULT_SECURITY_SSL_VERIFY_HOSTNAME = true;
 
 	// ----------------------------- Streaming Values --------------------------
@@ -1449,56 +1687,109 @@ public final class ConfigConstants {
 
 	// --------------------------- ZooKeeper ----------------------------------
 
+	/** @deprecated in favor of {@link HighAvailabilityOptions#HA_ZOOKEEPER_ROOT}. */
+	@Deprecated
 	public static final String DEFAULT_ZOOKEEPER_DIR_KEY = "/flink";
 
+	/** @deprecated in favor of {@link HighAvailabilityOptions#HA_ZOOKEEPER_NAMESPACE}. */
+	@Deprecated
 	public static final String DEFAULT_ZOOKEEPER_NAMESPACE_KEY = "/default";
 
+	/** @deprecated in favor of {@link HighAvailabilityOptions#HA_ZOOKEEPER_LATCH_PATH}. */
+	@Deprecated
 	public static final String DEFAULT_ZOOKEEPER_LATCH_PATH = "/leaderlatch";
 
+	/** @deprecated in favor of {@link HighAvailabilityOptions#HA_ZOOKEEPER_LEADER_PATH}. */
+	@Deprecated
 	public static final String DEFAULT_ZOOKEEPER_LEADER_PATH = "/leader";
 
+	/** @deprecated in favor of {@link HighAvailabilityOptions#HA_ZOOKEEPER_JOBGRAPHS_PATH}. */
+	@Deprecated
 	public static final String DEFAULT_ZOOKEEPER_JOBGRAPHS_PATH = "/jobgraphs";
 
+	/** @deprecated in favor of {@link HighAvailabilityOptions#HA_ZOOKEEPER_CHECKPOINTS_PATH}. */
+	@Deprecated
 	public static final String DEFAULT_ZOOKEEPER_CHECKPOINTS_PATH = "/checkpoints";
 
+	/** @deprecated in favor of {@link HighAvailabilityOptions#HA_ZOOKEEPER_CHECKPOINT_COUNTER_PATH} */
+	@Deprecated
 	public static final String DEFAULT_ZOOKEEPER_CHECKPOINT_COUNTER_PATH = "/checkpoint-counter";
 
+	/** @deprecated in favor of {@link HighAvailabilityOptions#HA_ZOOKEEPER_MESOS_WORKERS_PATH}. */
+	@Deprecated
 	public static final String DEFAULT_ZOOKEEPER_MESOS_WORKERS_PATH = "/mesos-workers";
 
+	/** @deprecated in favor of {@link HighAvailabilityOptions#ZOOKEEPER_SESSION_TIMEOUT}. */
+	@Deprecated
 	public static final int DEFAULT_ZOOKEEPER_SESSION_TIMEOUT = 60000;
 
+	/** @deprecated in favor of {@link HighAvailabilityOptions#ZOOKEEPER_CONNECTION_TIMEOUT}. */
+	@Deprecated
 	public static final int DEFAULT_ZOOKEEPER_CONNECTION_TIMEOUT = 15000;
 
+	/** @deprecated in favor of {@link HighAvailabilityOptions#ZOOKEEPER_RETRY_WAIT}. */
+	@Deprecated
 	public static final int DEFAULT_ZOOKEEPER_RETRY_WAIT = 5000;
 
+	/** @deprecated in favor of {@link HighAvailabilityOptions#ZOOKEEPER_MAX_RETRY_ATTEMPTS}. */
+	@Deprecated
 	public static final int DEFAULT_ZOOKEEPER_MAX_RETRY_ATTEMPTS = 3;
 
 	// - Defaults for required ZooKeeper configuration keys -------------------
 
-	/** ZooKeeper default client port. */
+	/**
+	 * ZooKeeper default client port.
+	 * @deprecated in favor of {@code FlinkZookeeperQuorumPeer#DEFAULT_ZOOKEEPER_CLIENT_PORT}.
+	 */
+	@Deprecated
 	public static final int DEFAULT_ZOOKEEPER_CLIENT_PORT = 2181;
 
-	/** ZooKeeper default init limit. */
+	/**
+	 * ZooKeeper default init limit.
+	 * @deprecated in favor of {@code FlinkZookeeperQuorumPeer#DEFAULT_ZOOKEEPER_INIT_LIMIT}.
+	 */
+	@Deprecated
 	public static final int DEFAULT_ZOOKEEPER_INIT_LIMIT = 10;
 
-	/** ZooKeeper default sync limit. */
+	/**
+	 * ZooKeeper default sync limit.
+	 * @deprecated in favor of {@code FlinkZookeeperQuorumPeer#DEFAULT_ZOOKEEPER_SYNC_LIMIT}.
+	 */
+	@Deprecated
 	public static final int DEFAULT_ZOOKEEPER_SYNC_LIMIT = 5;
 
-	/** ZooKeeper default peer port. */
+	/**
+	 * ZooKeeper default peer port.
+	 * @deprecated in favor of {@code FlinkZookeeperQuorumPeer#DEFAULT_ZOOKEEPER_PEER_PORT}.
+	 */
+	@Deprecated
 	public static final int DEFAULT_ZOOKEEPER_PEER_PORT = 2888;
 
-	/** ZooKeeper default leader port. */
+	/**
+	 * ZooKeeper default leader port.
+	 * @deprecated in favor of {@code FlinkZookeeperQuorumPeer#DEFAULT_ZOOKEEPER_LEADER_PORT}.
+	 */
+	@Deprecated
 	public static final int DEFAULT_ZOOKEEPER_LEADER_PORT = 3888;
 
-	/** Defaults for ZK client security **/
+	/**
+	 * Defaults for ZK client security.
+	 * @deprecated in favor of {@link SecurityOptions#ZOOKEEPER_SASL_DISABLE}.
+	 */
+	@Deprecated
 	public static final boolean DEFAULT_ZOOKEEPER_SASL_DISABLE = true;
 
-	/** ACL options supported "creator" or "open" */
+	/**
+	 * ACL options supported "creator" or "open".
+	 * @deprecated in favor of {@link HighAvailabilityOptions#ZOOKEEPER_CLIENT_ACL}.
+	 */
+	@Deprecated
 	public static final String DEFAULT_HA_ZOOKEEPER_CLIENT_ACL = "open";
 
 	// ----------------------------- Metrics ----------------------------
 
-	/** The default number of measured latencies to maintain at each operator */
+	/** @deprecated Use {@link MetricOptions#LATENCY_HISTORY_SIZE} instead. */
+	@Deprecated
 	public static final int DEFAULT_METRICS_LATENCY_HISTORY_SIZE = 128;
 
 	// ----------------------------- Environment Variables ----------------------------

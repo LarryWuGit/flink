@@ -30,14 +30,23 @@ public interface Parameter<T> {
 	/**
 	 * An informal usage string. Parameter names are prefixed with "--".
 	 *
-	 * Optional parameters are enclosed by "[" and "]".
+	 * <p>Optional parameters are enclosed by "[" and "]".
 	 *
-	 * Generic values are represented by all-caps with specific values enclosed
+	 * <p>Generic values are represented by all-caps with specific values enclosed
 	 * by "&lt;" and "&gt;".
 	 *
 	 * @return command-line usage string
 	 */
 	String getUsage();
+
+	/**
+	 * A hidden parameter is parsed from the command-line configuration but is
+	 * not printed in the usage string. This can be used for power-user options
+	 * not displayed to the general user.
+	 *
+	 * @return whether this parameter should be hidden from standard usage
+	 */
+	boolean isHidden();
 
 	/**
 	 * Read and parse the parameter value from command-line arguments.

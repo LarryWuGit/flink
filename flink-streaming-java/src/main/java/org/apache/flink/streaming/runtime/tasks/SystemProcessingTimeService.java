@@ -21,6 +21,7 @@ import org.apache.flink.annotation.VisibleForTesting;
 import org.apache.flink.util.Preconditions;
 
 import javax.annotation.Nonnull;
+
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.CancellationException;
 import java.util.concurrent.Delayed;
@@ -49,14 +50,13 @@ public class SystemProcessingTimeService extends ProcessingTimeService {
 	/** The containing task that owns this time service provider. */
 	private final AsyncExceptionHandler task;
 
-	/** The lock that timers acquire upon triggering */
+	/** The lock that timers acquire upon triggering. */
 	private final Object checkpointLock;
 
-	/** The executor service that schedules and calls the triggers of this task*/
+	/** The executor service that schedules and calls the triggers of this task. */
 	private final ScheduledThreadPoolExecutor timerService;
 
 	private final AtomicInteger status;
-
 
 	public SystemProcessingTimeService(AsyncExceptionHandler failureHandler, Object checkpointLock) {
 		this(failureHandler, checkpointLock, null);
@@ -92,7 +92,8 @@ public class SystemProcessingTimeService extends ProcessingTimeService {
 	}
 
 	/**
-	 * Registers a task to be executed no sooner than time {@code timestamp}, but without strong guarantees of order
+	 * Registers a task to be executed no sooner than time {@code timestamp}, but without strong
+	 * guarantees of order.
 	 *
 	 * @param timestamp Time when the task is to be enabled (in processing time)
 	 * @param target    The task to be executed
@@ -168,9 +169,8 @@ public class SystemProcessingTimeService extends ProcessingTimeService {
 
 	@Override
 	public void shutdownService() {
-		if (status.compareAndSet(STATUS_ALIVE, STATUS_SHUTDOWN) || 
-				status.compareAndSet(STATUS_QUIESCED, STATUS_SHUTDOWN))
-		{
+		if (status.compareAndSet(STATUS_ALIVE, STATUS_SHUTDOWN) ||
+				status.compareAndSet(STATUS_QUIESCED, STATUS_SHUTDOWN)) {
 			timerService.shutdownNow();
 		}
 	}
@@ -273,7 +273,6 @@ public class SystemProcessingTimeService extends ProcessingTimeService {
 		private final long delayMillis;
 
 		private volatile boolean canceled;
-
 
 		private NeverCompleteFuture(long delayMillis) {
 			this.delayMillis = delayMillis;

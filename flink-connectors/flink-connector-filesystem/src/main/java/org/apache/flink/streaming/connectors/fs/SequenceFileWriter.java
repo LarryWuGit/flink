@@ -15,8 +15,8 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package org.apache.flink.streaming.connectors.fs;
 
+package org.apache.flink.streaming.connectors.fs;
 
 import org.apache.flink.api.common.ExecutionConfig;
 import org.apache.flink.api.common.typeinfo.TypeInformation;
@@ -25,6 +25,7 @@ import org.apache.flink.api.java.typeutils.InputTypeConfigurable;
 import org.apache.flink.api.java.typeutils.TupleTypeInfoBase;
 import org.apache.flink.runtime.fs.hdfs.HadoopFileSystem;
 import org.apache.flink.streaming.connectors.fs.bucketing.BucketingSink;
+
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
@@ -38,7 +39,7 @@ import java.io.IOException;
 /**
  * A {@link Writer} that writes the bucket files as Hadoop {@link SequenceFile SequenceFiles}.
  * The input to the {@link BucketingSink} must
- * be a {@link org.apache.flink.api.java.tuple.Tuple2} of two Hadopo
+ * be a {@link org.apache.flink.api.java.tuple.Tuple2} of two Hadoop
  * {@link org.apache.hadoop.io.Writable Writables}.
  *
  * @param <K> The type of the first tuple field.
@@ -88,7 +89,7 @@ public class SequenceFileWriter<K extends Writable, V extends Writable> extends 
 		}
 
 		CompressionCodec codec = null;
-		
+
 		Configuration conf = HadoopFileSystem.getHadoopConfiguration();
 
 		if (!compressionCodecName.equals("None")) {

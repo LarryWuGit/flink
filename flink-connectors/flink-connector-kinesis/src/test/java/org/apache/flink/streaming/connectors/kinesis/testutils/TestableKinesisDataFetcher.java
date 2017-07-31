@@ -18,6 +18,7 @@
 package org.apache.flink.streaming.connectors.kinesis.testutils;
 
 import org.apache.flink.api.common.functions.RuntimeContext;
+import org.apache.flink.core.testutils.OneShotLatch;
 import org.apache.flink.streaming.api.functions.source.SourceFunction;
 import org.apache.flink.streaming.connectors.kinesis.internals.KinesisDataFetcher;
 import org.apache.flink.streaming.connectors.kinesis.model.KinesisStreamShardState;
@@ -26,6 +27,7 @@ import org.apache.flink.streaming.connectors.kinesis.proxy.KinesisProxyInterface
 import org.apache.flink.streaming.connectors.kinesis.serialization.KinesisDeserializationSchema;
 import org.apache.flink.streaming.connectors.kinesis.serialization.KinesisDeserializationSchemaWrapper;
 import org.apache.flink.streaming.util.serialization.SimpleStringSchema;
+
 import org.mockito.Mockito;
 import org.mockito.invocation.InvocationOnMock;
 import org.mockito.stubbing.Answer;
@@ -36,20 +38,26 @@ import java.util.List;
 import java.util.Properties;
 import java.util.concurrent.atomic.AtomicReference;
 
+/**
+ * Extension of the {@link KinesisDataFetcher} for testing.
+ */
 public class TestableKinesisDataFetcher extends KinesisDataFetcher<String> {
 
 	private static final Object fakeCheckpointLock = new Object();
 
 	private long numElementsCollected;
 
-	public TestableKinesisDataFetcher(List<String> fakeStreams,
-									  Properties fakeConfiguration,
-									  int fakeTotalCountOfSubtasks,
-									  int fakeTndexOfThisSubtask,
-									  AtomicReference<Throwable> thrownErrorUnderTest,
-									  LinkedList<KinesisStreamShardState> subscribedShardsStateUnderTest,
-									  HashMap<String, String> subscribedStreamsToLastDiscoveredShardIdsStateUnderTest,
-									  KinesisProxyInterface fakeKinesis) {
+	private OneShotLatch runWaiter;
+
+	public TestableKinesisDataFetcher(
+			List<String> fakeStreams,
+			Properties fakeConfiguration,
+			int fakeTotalCountOfSubtasks,
+			int fakeTndexOfThisSubtask,
+			AtomicReference<Throwable> thrownErrorUnderTest,
+			LinkedList<KinesisStreamShardState> subscribedShardsStateUnderTest,
+			HashMap<String, String> subscribedStreamsToLastDiscoveredShardIdsStateUnderTest,
+			KinesisProxyInterface fakeKinesis) {
 		super(fakeStreams,
 			getMockedSourceContext(),
 			fakeCheckpointLock,
@@ -62,6 +70,7 @@ public class TestableKinesisDataFetcher extends KinesisDataFetcher<String> {
 			fakeKinesis);
 
 		this.numElementsCollected = 0;
+		this.runWaiter = new OneShotLatch();
 	}
 
 	public long getNumOfElementsCollected() {
@@ -79,6 +88,16 @@ public class TestableKinesisDataFetcher extends KinesisDataFetcher<String> {
 			this.numElementsCollected++;
 			updateState(shardStateIndex, lastSequenceNumber);
 		}
+	}
+
+	@Override
+	public void runFetcher() throws Exception {
+		runWaiter.trigger();
+		super.runFetcher();
+	}
+
+	public void waitUntilRun() throws Exception {
+		runWaiter.await();
 	}
 
 	@SuppressWarnings("unchecked")

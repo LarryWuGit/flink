@@ -18,25 +18,10 @@
 
 package org.apache.flink.yarn;
 
-import java.io.File;
-import java.io.IOException;
-import java.lang.reflect.InvocationTargetException;
-import java.nio.ByteBuffer;
-import java.util.Collection;
-import java.util.Collections;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
-import java.util.UUID;
-
+import org.apache.flink.configuration.ConfigConstants;
 import org.apache.flink.runtime.clusterframework.BootstrapTools;
 import org.apache.flink.runtime.clusterframework.ContaineredTaskManagerParameters;
-import org.apache.hadoop.yarn.api.ApplicationConstants;
-import org.apache.hadoop.yarn.util.Records;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-
-import org.apache.flink.configuration.ConfigConstants;
+import org.apache.flink.runtime.security.SecurityUtils;
 
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.FileStatus;
@@ -50,6 +35,7 @@ import org.apache.hadoop.security.UserGroupInformation;
 import org.apache.hadoop.security.token.Token;
 import org.apache.hadoop.security.token.TokenIdentifier;
 import org.apache.hadoop.util.StringInterner;
+import org.apache.hadoop.yarn.api.ApplicationConstants;
 import org.apache.hadoop.yarn.api.ApplicationConstants.Environment;
 import org.apache.hadoop.yarn.api.records.ContainerLaunchContext;
 import org.apache.hadoop.yarn.api.records.LocalResource;
@@ -57,6 +43,21 @@ import org.apache.hadoop.yarn.api.records.LocalResourceType;
 import org.apache.hadoop.yarn.api.records.LocalResourceVisibility;
 import org.apache.hadoop.yarn.conf.YarnConfiguration;
 import org.apache.hadoop.yarn.util.ConverterUtils;
+import org.apache.hadoop.yarn.util.Records;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import java.io.File;
+import java.io.IOException;
+import java.lang.reflect.InvocationTargetException;
+import java.lang.reflect.Method;
+import java.nio.ByteBuffer;
+import java.util.Collection;
+import java.util.Collections;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.UUID;
 
 import static org.apache.flink.yarn.YarnConfigKeys.ENV_FLINK_CLASSPATH;
 
@@ -64,20 +65,20 @@ import static org.apache.flink.yarn.YarnConfigKeys.ENV_FLINK_CLASSPATH;
  * Utility class that provides helper methods to work with Apache Hadoop YARN.
  */
 public final class Utils {
-	
+
 	private static final Logger LOG = LoggerFactory.getLogger(Utils.class);
 
-	/** Keytab file name populated in YARN container */
+	/** Keytab file name populated in YARN container. */
 	public static final String KEYTAB_FILE_NAME = "krb5.keytab";
 
-	/** KRB5 file name populated in YARN container for secure IT run */
+	/** KRB5 file name populated in YARN container for secure IT run. */
 	public static final String KRB5_FILE_NAME = "krb5.conf";
 
-	/** Yarn site xml file name populated in YARN container for secure IT run */
+	/** Yarn site xml file name populated in YARN container for secure IT run. */
 	public static final String YARN_SITE_FILE_NAME = "yarn-site.xml";
 
 	/**
-	 * See documentation
+	 * See documentation.
 	 */
 	public static int calculateHeapSize(int memory, org.apache.flink.configuration.Configuration conf) {
 
@@ -102,13 +103,12 @@ public final class Utils {
 				+ "' is higher (" + minCutoff + ") than the requested amount of memory " + memory);
 		}
 
-		int heapLimit = (int)((float)memory * memoryCutoffRatio);
+		int heapLimit = (int) ((float) memory * memoryCutoffRatio);
 		if (heapLimit < minCutoff) {
 			heapLimit = minCutoff;
 		}
 		return memory - heapLimit;
 	}
-
 
 	public static void setupYarnClassPath(Configuration conf, Map<String, String> appMasterEnv) {
 		addToEnvironment(
@@ -123,9 +123,7 @@ public final class Utils {
 		}
 	}
 
-
 	/**
-	 * 
 	 * @return Path to remote file (usually hdfs)
 	 * @throws IOException
 	 */
@@ -165,7 +163,7 @@ public final class Utils {
 		UserGroupInformation currUsr = UserGroupInformation.getCurrentUser();
 
 		Collection<Token<? extends TokenIdentifier>> usrTok = currUsr.getTokens();
-		for(Token<? extends TokenIdentifier> token : usrTok) {
+		for (Token<? extends TokenIdentifier> token : usrTok) {
 			final Text id = new Text(token.getIdentifier());
 			LOG.info("Adding user token " + id + " with " + token);
 			credentials.addToken(id, token);
@@ -173,7 +171,7 @@ public final class Utils {
 		try (DataOutputBuffer dob = new DataOutputBuffer()) {
 			credentials.writeTokenStorageToStream(dob);
 
-			if(LOG.isDebugEnabled()) {
+			if (LOG.isDebugEnabled()) {
 				LOG.debug("Wrote tokens. Credentials buffer length: " + dob.getLength());
 			}
 
@@ -193,7 +191,7 @@ public final class Utils {
 				// Intended call: HBaseConfiguration.addHbaseResources(conf);
 				Class
 						.forName("org.apache.hadoop.hbase.HBaseConfiguration")
-						.getMethod("addHbaseResources", Configuration.class )
+						.getMethod("addHbaseResources", Configuration.class)
 						.invoke(null, conf);
 				// ----
 
@@ -220,7 +218,7 @@ public final class Utils {
 
 				credentials.addToken(token.getService(), token);
 				LOG.info("Added HBase Kerberos security token to credentials.");
-			} catch ( ClassNotFoundException
+			} catch (ClassNotFoundException
 					| NoSuchMethodException
 					| IllegalAccessException
 					| InvocationTargetException e) {
@@ -231,7 +229,7 @@ public final class Utils {
 	}
 
 	/**
-	 * Copied method from org.apache.hadoop.yarn.util.Apps
+	 * Copied method from org.apache.hadoop.yarn.util.Apps.
 	 * It was broken by YARN-1824 (2.4.0) and fixed for 2.4.1
 	 * by https://issues.apache.org/jira/browse/YARN-1931
 	 */
@@ -262,8 +260,8 @@ public final class Utils {
 	 */
 	public static Map<String, String> getEnvironmentVariables(String envPrefix, org.apache.flink.configuration.Configuration flinkConfiguration) {
 		Map<String, String> result  = new HashMap<>();
-		for(Map.Entry<String, String> entry: flinkConfiguration.toMap().entrySet()) {
-			if(entry.getKey().startsWith(envPrefix) && entry.getKey().length() > envPrefix.length()) {
+		for (Map.Entry<String, String> entry: flinkConfiguration.toMap().entrySet()) {
+			if (entry.getKey().startsWith(envPrefix) && entry.getKey().length() > envPrefix.length()) {
 				// remove prefix
 				String key = entry.getKey().substring(envPrefix.length());
 				result.put(key, entry.getValue());
@@ -347,7 +345,7 @@ public final class Utils {
 
 		//register keytab
 		LocalResource keytabResource = null;
-		if(remoteKeytabPath != null) {
+		if (remoteKeytabPath != null) {
 			log.info("Adding keytab {} to the AM container local resource bucket", remoteKeytabPath);
 			keytabResource = Records.newRecord(LocalResource.class);
 			Path keytabPath = new Path(remoteKeytabPath);
@@ -359,7 +357,7 @@ public final class Utils {
 		LocalResource yarnConfResource = null;
 		LocalResource krb5ConfResource = null;
 		boolean hasKrb5 = false;
-		if(remoteYarnConfPath != null && remoteKrb5Path != null) {
+		if (remoteYarnConfPath != null && remoteKrb5Path != null) {
 			log.info("TM:Adding remoteYarnConfPath {} to the container local resource bucket", remoteYarnConfPath);
 			yarnConfResource = Records.newRecord(LocalResource.class);
 			Path yarnConfPath = new Path(remoteYarnConfPath);
@@ -405,12 +403,12 @@ public final class Utils {
 		taskManagerLocalResources.put("flink-conf.yaml", flinkConf);
 
 		//To support Yarn Secure Integration Test Scenario
-		if(yarnConfResource != null && krb5ConfResource != null) {
+		if (yarnConfResource != null && krb5ConfResource != null) {
 			taskManagerLocalResources.put(YARN_SITE_FILE_NAME, yarnConfResource);
 			taskManagerLocalResources.put(KRB5_FILE_NAME, krb5ConfResource);
 		}
 
-		if(keytabResource != null) {
+		if (keytabResource != null) {
 			taskManagerLocalResources.put(KEYTAB_FILE_NAME, keytabResource);
 		}
 
@@ -450,7 +448,7 @@ public final class Utils {
 
 		containerEnv.put(YarnConfigKeys.ENV_HADOOP_USER_NAME, UserGroupInformation.getCurrentUser().getUserName());
 
-		if(remoteKeytabPath != null && remoteKeytabPrincipal != null) {
+		if (remoteKeytabPath != null && remoteKeytabPrincipal != null) {
 			containerEnv.put(YarnConfigKeys.KEYTAB_PATH, remoteKeytabPath);
 			containerEnv.put(YarnConfigKeys.KEYTAB_PRINCIPAL, remoteKeytabPrincipal);
 		}
@@ -459,9 +457,16 @@ public final class Utils {
 
 		try (DataOutputBuffer dob = new DataOutputBuffer()) {
 			log.debug("Adding security tokens to Task Executor Container launch Context....");
-			UserGroupInformation user = UserGroupInformation.getCurrentUser();
-			Credentials credentials = user.getCredentials();
-			credentials.writeTokenStorageToStream(dob);
+
+			// For TaskManager YARN container context, read the tokens from the jobmanager yarn container local flie.
+			// NOTE: must read the tokens from the local file, not from the UGI context, because if UGI is login
+			// using Kerberos keytabs, there is no HDFS delegation token in the UGI context.
+			String fileLocation = System.getenv(UserGroupInformation.HADOOP_TOKEN_FILE_LOCATION);
+			Method readTokenStorageFileMethod = Credentials.class.getMethod(
+				"readTokenStorageFile", File.class, org.apache.hadoop.conf.Configuration.class);
+			Credentials cred = (Credentials) readTokenStorageFileMethod.invoke(null, new File(fileLocation),
+				new SecurityUtils.SecurityConfiguration(flinkConfig).getHadoopConfiguration());
+			cred.writeTokenStorageToStream(dob);
 			ByteBuffer securityTokens = ByteBuffer.wrap(dob.getData(), 0, dob.getLength());
 			ctx.setTokens(securityTokens);
 		}

@@ -18,12 +18,13 @@
 
 package org.apache.flink.api.common;
 
-import com.esotericsoftware.kryo.Serializer;
 import org.apache.flink.annotation.Internal;
 import org.apache.flink.annotation.Public;
 import org.apache.flink.annotation.PublicEvolving;
 import org.apache.flink.api.common.restartstrategy.RestartStrategies;
 import org.apache.flink.configuration.TaskManagerOptions;
+
+import com.esotericsoftware.kryo.Serializer;
 
 import java.io.Serializable;
 import java.util.Collections;
@@ -82,16 +83,6 @@ public class ExecutionConfig implements Serializable, Archiveable<ArchivedExecut
 	 * unchanged.
 	 */
 	public static final int PARALLELISM_UNKNOWN = -2;
-
-	/**
-	 * The default lower bound for max parallelism if nothing was configured by the user. We have
-	 * this to allow users some degree of scale-up in case they forgot to configure maximum
-	 * parallelism explicitly.
-	 */
-	public static final int DEFAULT_LOWER_BOUND_MAX_PARALLELISM = 1 << 7;
-
-	/** The (inclusive) upper bound for max parallelism */
-	public static final int UPPER_BOUND_MAX_PARALLELISM = 1 << 15;
 
 	private static final long DEFAULT_RESTART_DELAY = 10000L;
 
@@ -155,6 +146,9 @@ public class ExecutionConfig implements Serializable, Archiveable<ArchivedExecut
 	 * TaskManager error, usually killing the JVM.
 	 */
 	private long taskCancellationTimeoutMillis = -1;
+
+	/** This flag defines if we use compression for the state snapshot data or not. Default: false */
+	private boolean useSnapshotCompression = false;
 
 	// ------------------------------- User code values --------------------------------------------
 
@@ -293,18 +287,13 @@ public class ExecutionConfig implements Serializable, Archiveable<ArchivedExecut
 	 * @param parallelism The parallelism to use
 	 */
 	public ExecutionConfig setParallelism(int parallelism) {
-		checkArgument(parallelism != PARALLELISM_UNKNOWN, "Cannot specify UNKNOWN_PARALLELISM.");
-		checkArgument(
-				parallelism >= 1 || parallelism == PARALLELISM_DEFAULT,
-				"Parallelism must be at least one, or ExecutionConfig.PARALLELISM_DEFAULT " +
-						"(use system default).");
-		checkArgument(
-				maxParallelism == -1 || parallelism <= maxParallelism,
-				"The specified parallelism must be smaller or equal to the maximum parallelism.");
-		checkArgument(
-				maxParallelism == -1 || parallelism != PARALLELISM_DEFAULT,
-				"Default parallelism cannot be specified when maximum parallelism is specified");
-		this.parallelism = parallelism;
+		if (parallelism != PARALLELISM_UNKNOWN) {
+			if (parallelism < 1 && parallelism != PARALLELISM_DEFAULT) {
+				throw new IllegalArgumentException(
+					"Parallelism must be at least one, or ExecutionConfig.PARALLELISM_DEFAULT (use system default).");
+			}
+			this.parallelism = parallelism;
+		}
 		return this;
 	}
 
@@ -331,18 +320,7 @@ public class ExecutionConfig implements Serializable, Archiveable<ArchivedExecut
 	 */
 	@PublicEvolving
 	public void setMaxParallelism(int maxParallelism) {
-		checkArgument(
-				parallelism != PARALLELISM_DEFAULT,
-				"A maximum parallelism can only be specified with an explicitly specified " +
-						"parallelism.");
 		checkArgument(maxParallelism > 0, "The maximum parallelism must be greater than 0.");
-		checkArgument(
-				maxParallelism >= parallelism,
-				"The maximum parallelism must be larger than the parallelism.");
-		checkArgument(
-				maxParallelism > 0 && maxParallelism <= UPPER_BOUND_MAX_PARALLELISM,
-				"maxParallelism is out of bounds 0 < maxParallelism <= " +
-						UPPER_BOUND_MAX_PARALLELISM + ". Found: " + maxParallelism);
 		this.maxParallelism = maxParallelism;
 	}
 
@@ -866,6 +844,14 @@ public class ExecutionConfig implements Serializable, Archiveable<ArchivedExecut
 		this.autoTypeRegistrationEnabled = false;
 	}
 
+	public boolean isUseSnapshotCompression() {
+		return useSnapshotCompression;
+	}
+
+	public void setUseSnapshotCompression(boolean useSnapshotCompression) {
+		this.useSnapshotCompression = useSnapshotCompression;
+	}
+
 	@Override
 	public boolean equals(Object obj) {
 		if (obj instanceof ExecutionConfig) {
@@ -890,7 +876,8 @@ public class ExecutionConfig implements Serializable, Archiveable<ArchivedExecut
 				defaultKryoSerializerClasses.equals(other.defaultKryoSerializerClasses) &&
 				registeredKryoTypes.equals(other.registeredKryoTypes) &&
 				registeredPojoTypes.equals(other.registeredPojoTypes) &&
-				taskCancellationIntervalMillis == other.taskCancellationIntervalMillis;
+				taskCancellationIntervalMillis == other.taskCancellationIntervalMillis &&
+				useSnapshotCompression == other.useSnapshotCompression;
 
 		} else {
 			return false;
@@ -917,7 +904,8 @@ public class ExecutionConfig implements Serializable, Archiveable<ArchivedExecut
 			defaultKryoSerializerClasses,
 			registeredKryoTypes,
 			registeredPojoTypes,
-			taskCancellationIntervalMillis);
+			taskCancellationIntervalMillis,
+			useSnapshotCompression);
 	}
 
 	public boolean canEqual(Object obj) {

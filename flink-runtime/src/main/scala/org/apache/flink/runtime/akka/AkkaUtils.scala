@@ -26,12 +26,14 @@ import akka.actor._
 import akka.pattern.{ask => akkaAsk}
 import com.typesafe.config.{Config, ConfigFactory}
 import org.apache.flink.api.common.time.Time
-import org.apache.flink.configuration.{AkkaOptions, ConfigConstants, Configuration}
+import org.apache.flink.configuration.{AkkaOptions, Configuration, SecurityOptions}
 import org.apache.flink.runtime.net.SSLUtils
 import org.apache.flink.util.NetUtils
+import org.jboss.netty.channel.ChannelException
 import org.jboss.netty.logging.{InternalLoggerFactory, Slf4JLoggerFactory}
 import org.slf4j.LoggerFactory
 
+import scala.annotation.tailrec
 import scala.concurrent._
 import scala.concurrent.duration._
 import scala.language.postfixOps
@@ -184,13 +186,11 @@ object AkkaUtils {
    * @return Flink's basic Akka config
    */
   private def getBasicAkkaConfig(configuration: Configuration): Config = {
-    val akkaThroughput = configuration.getInteger(ConfigConstants.AKKA_DISPATCHER_THROUGHPUT,
-      ConfigConstants.DEFAULT_AKKA_DISPATCHER_THROUGHPUT)
-    val lifecycleEvents = configuration.getBoolean(ConfigConstants.AKKA_LOG_LIFECYCLE_EVENTS,
-      ConfigConstants.DEFAULT_AKKA_LOG_LIFECYCLE_EVENTS)
+    val akkaThroughput = configuration.getInteger(AkkaOptions.DISPATCHER_THROUGHPUT)
+    val lifecycleEvents = configuration.getBoolean(AkkaOptions.LOG_LIFECYCLE_EVENTS)
 
     val jvmExitOnFatalError = if (
-      configuration.getBoolean(ConfigConstants.AKKA_JVM_EXIT_ON_FATAL_ERROR, true)){
+      configuration.getBoolean(AkkaOptions.JVM_EXIT_ON_FATAL_ERROR)){
       "on"
     } else {
       "off"
@@ -203,7 +203,7 @@ object AkkaUtils {
     val config =
       s"""
         |akka {
-        | daemonic = on
+        | daemonic = off
         |
         | loggers = ["akka.event.slf4j.Slf4jLogger"]
         | logging-filter = "akka.event.slf4j.Slf4jLoggingFilter"
@@ -269,79 +269,53 @@ object AkkaUtils {
                                   bindAddress: String, port: Int,
                                   externalHostname: String, externalPort: Int): Config = {
 
-    val akkaAskTimeout = Duration(configuration.getString(
-      ConfigConstants.AKKA_ASK_TIMEOUT,
-      ConfigConstants.DEFAULT_AKKA_ASK_TIMEOUT))
+    val akkaAskTimeout = Duration(configuration.getString(AkkaOptions.ASK_TIMEOUT))
 
     val startupTimeout = configuration.getString(
-      ConfigConstants.AKKA_STARTUP_TIMEOUT,
+      AkkaOptions.STARTUP_TIMEOUT,
       (akkaAskTimeout * 10).toString)
 
     val transportHeartbeatInterval = configuration.getString(
-      ConfigConstants.AKKA_TRANSPORT_HEARTBEAT_INTERVAL,
-      ConfigConstants.DEFAULT_AKKA_TRANSPORT_HEARTBEAT_INTERVAL)
+      AkkaOptions.TRANSPORT_HEARTBEAT_INTERVAL)
 
     val transportHeartbeatPause = configuration.getString(
-      ConfigConstants.AKKA_TRANSPORT_HEARTBEAT_PAUSE,
-      ConfigConstants.DEFAULT_AKKA_TRANSPORT_HEARTBEAT_PAUSE)
+      AkkaOptions.TRANSPORT_HEARTBEAT_PAUSE)
 
-    val transportThreshold = configuration.getDouble(
-      ConfigConstants.AKKA_TRANSPORT_THRESHOLD,
-      ConfigConstants.DEFAULT_AKKA_TRANSPORT_THRESHOLD)
+    val transportThreshold = configuration.getDouble(AkkaOptions.TRANSPORT_THRESHOLD)
 
-    val watchHeartbeatInterval = configuration.getString(AkkaOptions.AKKA_WATCH_HEARTBEAT_INTERVAL);
+    val watchHeartbeatInterval = configuration.getString(
+      AkkaOptions.WATCH_HEARTBEAT_INTERVAL)
 
-    val watchHeartbeatPause = configuration.getString(AkkaOptions.AKKA_WATCH_HEARTBEAT_PAUSE);
+    val watchHeartbeatPause = configuration.getString(AkkaOptions.WATCH_HEARTBEAT_PAUSE)
 
-    val watchThreshold = configuration.getDouble(
-      ConfigConstants.AKKA_WATCH_THRESHOLD,
-      ConfigConstants.DEFAULT_AKKA_WATCH_THRESHOLD)
+    val watchThreshold = configuration.getInteger(AkkaOptions.WATCH_THRESHOLD)
 
-    val akkaTCPTimeout = configuration.getString(AkkaOptions.AKKA_TCP_TIMEOUT);
+    val akkaTCPTimeout = configuration.getString(AkkaOptions.TCP_TIMEOUT)
 
-    val akkaFramesize = configuration.getString(
-      ConfigConstants.AKKA_FRAMESIZE,
-      ConfigConstants.DEFAULT_AKKA_FRAMESIZE)
+    val akkaFramesize = configuration.getString(AkkaOptions.FRAMESIZE)
 
-    val lifecycleEvents = configuration.getBoolean(
-      ConfigConstants.AKKA_LOG_LIFECYCLE_EVENTS,
-      ConfigConstants.DEFAULT_AKKA_LOG_LIFECYCLE_EVENTS)
+    val lifecycleEvents = configuration.getBoolean(AkkaOptions.LOG_LIFECYCLE_EVENTS)
 
     val logLifecycleEvents = if (lifecycleEvents) "on" else "off"
 
-    val akkaEnableSSLConfig = configuration.getBoolean(ConfigConstants.AKKA_SSL_ENABLED,
-        ConfigConstants.DEFAULT_AKKA_SSL_ENABLED) &&
+    val akkaEnableSSLConfig = configuration.getBoolean(AkkaOptions.SSL_ENABLED) &&
           SSLUtils.getSSLEnabled(configuration)
 
     val akkaEnableSSL = if (akkaEnableSSLConfig) "on" else "off"
 
-    val akkaSSLKeyStore = configuration.getString(
-      ConfigConstants.SECURITY_SSL_KEYSTORE,
-      null)
+    val akkaSSLKeyStore = configuration.getString(SecurityOptions.SSL_KEYSTORE)
 
-    val akkaSSLKeyStorePassword = configuration.getString(
-      ConfigConstants.SECURITY_SSL_KEYSTORE_PASSWORD,
-      null)
+    val akkaSSLKeyStorePassword = configuration.getString(SecurityOptions.SSL_KEYSTORE_PASSWORD)
 
-    val akkaSSLKeyPassword = configuration.getString(
-      ConfigConstants.SECURITY_SSL_KEY_PASSWORD,
-      null)
+    val akkaSSLKeyPassword = configuration.getString(SecurityOptions.SSL_KEY_PASSWORD)
 
-    val akkaSSLTrustStore = configuration.getString(
-      ConfigConstants.SECURITY_SSL_TRUSTSTORE,
-      null)
+    val akkaSSLTrustStore = configuration.getString(SecurityOptions.SSL_TRUSTSTORE)
 
-    val akkaSSLTrustStorePassword = configuration.getString(
-      ConfigConstants.SECURITY_SSL_TRUSTSTORE_PASSWORD,
-      null)
+    val akkaSSLTrustStorePassword = configuration.getString(SecurityOptions.SSL_TRUSTSTORE_PASSWORD)
 
-    val akkaSSLProtocol = configuration.getString(
-      ConfigConstants.SECURITY_SSL_PROTOCOL,
-      ConfigConstants.DEFAULT_SECURITY_SSL_PROTOCOL)
+    val akkaSSLProtocol = configuration.getString(SecurityOptions.SSL_PROTOCOL)
 
-    val akkaSSLAlgorithmsString = configuration.getString(
-      ConfigConstants.SECURITY_SSL_ALGORITHMS,
-      ConfigConstants.DEFAULT_SECURITY_SSL_ALGORITHMS)
+    val akkaSSLAlgorithmsString = configuration.getString(SecurityOptions.SSL_ALGORITHMS)
     val akkaSSLAlgorithms = akkaSSLAlgorithmsString.split(",").toList.mkString("[", ",", "]")
 
     val configString =
@@ -588,14 +562,19 @@ object AkkaUtils {
   }
 
   def getTimeout(config: Configuration): FiniteDuration = {
-    val duration = Duration(config.getString(ConfigConstants.AKKA_ASK_TIMEOUT,
-      ConfigConstants.DEFAULT_AKKA_ASK_TIMEOUT))
+    val duration = Duration(config.getString(AkkaOptions.ASK_TIMEOUT))
 
     new FiniteDuration(duration.toMillis, TimeUnit.MILLISECONDS)
   }
 
+  def getTimeoutAsTime(config: Configuration): Time = {
+    val duration = Duration(config.getString(AkkaOptions.ASK_TIMEOUT))
+
+    Time.milliseconds(duration.toMillis)
+  }
+
   def getDefaultTimeout: Time = {
-    val duration = Duration(ConfigConstants.DEFAULT_AKKA_ASK_TIMEOUT)
+    val duration = Duration(AkkaOptions.ASK_TIMEOUT.defaultValue())
 
     Time.milliseconds(duration.toMillis)
   }
@@ -607,30 +586,24 @@ object AkkaUtils {
   }
 
   def getLookupTimeout(config: Configuration): FiniteDuration = {
-    val duration = Duration(config.getString(
-      ConfigConstants.AKKA_LOOKUP_TIMEOUT,
-      ConfigConstants.DEFAULT_AKKA_LOOKUP_TIMEOUT))
+    val duration = Duration(config.getString(AkkaOptions.LOOKUP_TIMEOUT))
 
     new FiniteDuration(duration.toMillis, TimeUnit.MILLISECONDS)
   }
 
   def getDefaultLookupTimeout: FiniteDuration = {
-    val duration = Duration(ConfigConstants.DEFAULT_AKKA_LOOKUP_TIMEOUT)
+    val duration = Duration(AkkaOptions.LOOKUP_TIMEOUT.defaultValue())
     new FiniteDuration(duration.toMillis, TimeUnit.MILLISECONDS)
   }
 
   def getClientTimeout(config: Configuration): FiniteDuration = {
-    val duration = Duration(
-      config.getString(
-        ConfigConstants.AKKA_CLIENT_TIMEOUT,
-        ConfigConstants.DEFAULT_AKKA_CLIENT_TIMEOUT
-      ))
+    val duration = Duration(config.getString(AkkaOptions.CLIENT_TIMEOUT))
 
     new FiniteDuration(duration.toMillis, TimeUnit.MILLISECONDS)
   }
 
   def getDefaultClientTimeout: FiniteDuration = {
-    val duration = Duration(ConfigConstants.DEFAULT_AKKA_CLIENT_TIMEOUT)
+    val duration = Duration(AkkaOptions.CLIENT_TIMEOUT.defaultValue())
 
     new FiniteDuration(duration.toMillis, TimeUnit.MILLISECONDS)
   }
@@ -707,18 +680,64 @@ object AkkaUtils {
       "(d|day)|(h|hour)|(min|minute)|s|sec|second)|(ms|milli|millisecond)|" +
       "(µs|micro|microsecond)|(ns|nano|nanosecond)"
   }
-  
-  /** Returns the protocol field for the URL of the remote actor system given the user configuration
+
+  /**
+    * Returns the local akka url for the given actor name.
     *
-    * @param config instance containing the user provided configuration values
-    * @return the remote url's protocol field
+    * @param actorName Actor name identifying the actor
+    * @return Local Akka URL for the given actor
     */
-  def getAkkaProtocol(config: Configuration): String = {
-    val sslEnabled = config.getBoolean(ConfigConstants.AKKA_SSL_ENABLED,
-        ConfigConstants.DEFAULT_AKKA_SSL_ENABLED) &&
-      SSLUtils.getSSLEnabled(config)
-    if (sslEnabled) "akka.ssl.tcp" else "akka.tcp"
+  def getLocalAkkaURL(actorName: String): String = {
+    "akka://flink/user/" + actorName
   }
 
+  /**
+    * Retries a function if it fails because of a [[java.net.BindException]].
+    *
+    * @param fn The function to retry
+    * @param stopCond Flag to signal termination
+    * @param maxSleepBetweenRetries Max random sleep time between retries
+    * @tparam T Return type of the the function to retry
+    * @return Return value of the the function to retry
+    */
+  @tailrec
+  def retryOnBindException[T](
+      fn: => T,
+      stopCond: => Boolean,
+      maxSleepBetweenRetries : Long = 0 )
+    : scala.util.Try[T] = {
+
+    def sleepBeforeRetry() : Unit = {
+      if (maxSleepBetweenRetries > 0) {
+        val sleepTime = (Math.random() * maxSleepBetweenRetries).asInstanceOf[Long]
+        LOG.info(s"Retrying after bind exception. Sleeping for $sleepTime ms.")
+        Thread.sleep(sleepTime)
+      }
+    }
+
+    scala.util.Try {
+      fn
+    } match {
+      case scala.util.Failure(x: BindException) =>
+        if (stopCond) {
+          scala.util.Failure(x)
+        } else {
+          sleepBeforeRetry()
+          retryOnBindException(fn, stopCond)
+        }
+      case scala.util.Failure(x: Exception) => x.getCause match {
+        case c: ChannelException =>
+          if (stopCond) {
+            scala.util.Failure(new RuntimeException(
+              "Unable to do further retries starting the actor system"))
+          } else {
+            sleepBeforeRetry()
+            retryOnBindException(fn, stopCond)
+          }
+        case _ => scala.util.Failure(x)
+      }
+      case f => f
+    }
+  }
 }
 

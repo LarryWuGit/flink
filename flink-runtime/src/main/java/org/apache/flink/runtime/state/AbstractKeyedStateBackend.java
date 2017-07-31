@@ -46,6 +46,7 @@ import org.apache.flink.runtime.state.internal.InternalListState;
 import org.apache.flink.runtime.state.internal.InternalMapState;
 import org.apache.flink.runtime.state.internal.InternalReducingState;
 import org.apache.flink.runtime.state.internal.InternalValueState;
+import org.apache.flink.util.IOUtils;
 import org.apache.flink.util.Preconditions;
 
 import java.io.Closeable;
@@ -61,7 +62,7 @@ import static org.apache.flink.util.Preconditions.checkNotNull;
  * @param <K> Type of the key by which state is keyed.
  */
 public abstract class AbstractKeyedStateBackend<K>
-		implements KeyedStateBackend<K>, Snapshotable<KeyedStateHandle>, Closeable {
+		implements KeyedStateBackend<K>, Snapshotable<KeyedStateHandle>, Closeable, CheckpointListener {
 
 	/** {@link TypeSerializer} for our key. */
 	protected final TypeSerializer<K> keySerializer;
@@ -97,13 +98,18 @@ public abstract class AbstractKeyedStateBackend<K>
 
 	private final ExecutionConfig executionConfig;
 
+	/**
+	 * Decoratores the input and output streams to write key-groups compressed.
+	 */
+	protected final StreamCompressionDecorator keyGroupCompressionDecorator;
+
 	public AbstractKeyedStateBackend(
-			TaskKvStateRegistry kvStateRegistry,
-			TypeSerializer<K> keySerializer,
-			ClassLoader userCodeClassLoader,
-			int numberOfKeyGroups,
-			KeyGroupRange keyGroupRange,
-			ExecutionConfig executionConfig) {
+		TaskKvStateRegistry kvStateRegistry,
+		TypeSerializer<K> keySerializer,
+		ClassLoader userCodeClassLoader,
+		int numberOfKeyGroups,
+		KeyGroupRange keyGroupRange,
+		ExecutionConfig executionConfig) {
 
 		this.kvStateRegistry = kvStateRegistry;//Preconditions.checkNotNull(kvStateRegistry);
 		this.keySerializer = Preconditions.checkNotNull(keySerializer);
@@ -113,6 +119,15 @@ public abstract class AbstractKeyedStateBackend<K>
 		this.cancelStreamRegistry = new CloseableRegistry();
 		this.keyValueStatesByName = new HashMap<>();
 		this.executionConfig = executionConfig;
+		this.keyGroupCompressionDecorator = determineStreamCompression(executionConfig);
+	}
+
+	private StreamCompressionDecorator determineStreamCompression(ExecutionConfig executionConfig) {
+		if (executionConfig != null && executionConfig.isUseSnapshotCompression()) {
+			return SnappyStreamCompressionDecorator.INSTANCE;
+		} else {
+			return UncompressedStreamCompressionDecorator.INSTANCE;
+		}
 	}
 
 	/**
@@ -122,6 +137,9 @@ public abstract class AbstractKeyedStateBackend<K>
 	 */
 	@Override
 	public void dispose() {
+
+		IOUtils.closeQuietly(this);
+
 		if (kvStateRegistry != null) {
 			kvStateRegistry.unregisterAll();
 		}
@@ -191,8 +209,11 @@ public abstract class AbstractKeyedStateBackend<K>
 	 *
 	 * @param <N> The type of the namespace.
 	 * @param <T> Type of the values folded into the state
-	 * @param <ACC> Type of the value in the state	 *
+	 * @param <ACC> Type of the value in the state
+	 *
+	 * @deprecated will be removed in a future version
 	 */
+	@Deprecated
 	protected abstract <N, T, ACC> InternalFoldingState<N, T, ACC> createFoldingState(
 			TypeSerializer<N> namespaceSerializer,
 			FoldingStateDescriptor<T, ACC> stateDesc) throws Exception;
@@ -386,5 +407,10 @@ public abstract class AbstractKeyedStateBackend<K>
 	@VisibleForTesting
 	public boolean supportsAsynchronousSnapshots() {
 		return false;
+	}
+
+	@VisibleForTesting
+	public StreamCompressionDecorator getKeyGroupCompressionDecorator() {
+		return keyGroupCompressionDecorator;
 	}
 }

@@ -18,18 +18,27 @@
 
 package org.apache.flink.graph.drivers;
 
-import org.apache.commons.lang3.ArrayUtils;
 import org.apache.flink.client.program.ProgramParametrizationException;
+
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.junit.runners.Parameterized;
 
+/**
+ * Tests for {@link GraphMetrics}.
+ */
 @RunWith(Parameterized.class)
-public class GraphMetricsITCase
-extends DriverBaseITCase {
+public class GraphMetricsITCase extends DriverBaseITCase {
 
-	public GraphMetricsITCase(TestExecutionMode mode) {
-		super(mode);
+	public GraphMetricsITCase(String idType, TestExecutionMode mode) {
+		super(idType, mode);
+	}
+
+	private String[] parameters(int scale, String order, String output) {
+		return new String[] {
+			"--algorithm", "GraphMetrics", "--order", order,
+			"--input", "RMatGraph", "--scale", Integer.toString(scale), "--type", idType, "--simplify", order,
+			"--output", output};
 	}
 
 	@Test
@@ -43,58 +52,50 @@ extends DriverBaseITCase {
 	}
 
 	@Test
-	public void testWithDirectedRMatIntegerGraph() throws Exception {
+	public void testWithDirectedRMatGraph() throws Exception {
 		String expected = "\n" +
 			"Vertex metrics:\n" +
-			"  vertex count: 902\n" +
-			"  edge count: 12,009\n" +
-			"  unidirectional edge count: 8,875\n" +
-			"  bidirectional edge count: 1,567\n" +
-			"  average degree: 13.314\n" +
-			"  density: 0.01477663\n" +
-			"  triplet count: 1,003,442\n" +
-			"  maximum degree: 463\n" +
-			"  maximum out degree: 334\n" +
-			"  maximum in degree: 342\n" +
-			"  maximum triplets: 106,953\n" +
+			"  vertex count: 117\n" +
+			"  edge count: 1,168\n" +
+			"  unidirectional edge count: 686\n" +
+			"  bidirectional edge count: 241\n" +
+			"  average degree: 9.983\n" +
+			"  density: 0.08605953\n" +
+			"  triplet count: 29,286\n" +
+			"  maximum degree: 91\n" +
+			"  maximum out degree: 77\n" +
+			"  maximum in degree: 68\n" +
+			"  maximum triplets: 4,095\n" +
 			"\n" +
 			"Edge metrics:\n" +
-			"  triangle triplet count: 107,817\n" +
-			"  rectangle triplet count: 315,537\n" +
-			"  maximum triangle triplets: 820\n" +
-			"  maximum rectangle triplets: 3,822\n";
+			"  triangle triplet count: 4,575\n" +
+			"  rectangle triplet count: 11,756\n" +
+			"  maximum triangle triplets: 153\n" +
+			"  maximum rectangle triplets: 391\n";
 
-		String[] arguments = new String[]{"--algorithm", "GraphMetrics", "--order", "directed",
-			"--input", "RMatGraph", "--type", "integer", "--simplify", "directed",
-			"--output"};
-
-		expectedOutput(ArrayUtils.addAll(arguments, "hash"), expected);
-		expectedOutput(ArrayUtils.addAll(arguments, "print"), expected);
+		expectedOutput(parameters(7, "directed", "hash"), expected);
+		expectedOutput(parameters(7, "directed", "print"), expected);
 	}
 
 	@Test
-	public void testWithUndirectedRMatIntegerGraph() throws Exception {
+	public void testWithUndirectedRMatGraph() throws Exception {
 		String expected = "\n" +
 			"Vertex metrics:\n" +
-			"  vertex count: 902\n" +
-			"  edge count: 10,442\n" +
-			"  average degree: 23.153\n" +
-			"  density: 0.025697\n" +
-			"  triplet count: 1,003,442\n" +
-			"  maximum degree: 463\n" +
-			"  maximum triplets: 106,953\n" +
+			"  vertex count: 117\n" +
+			"  edge count: 927\n" +
+			"  average degree: 15.846\n" +
+			"  density: 0.13660477\n" +
+			"  triplet count: 29,286\n" +
+			"  maximum degree: 91\n" +
+			"  maximum triplets: 4,095\n" +
 			"\n" +
 			"Edge metrics:\n" +
-			"  triangle triplet count: 107,817\n" +
-			"  rectangle triplet count: 315,537\n" +
-			"  maximum triangle triplets: 820\n" +
-			"  maximum rectangle triplets: 3,822\n";
+			"  triangle triplet count: 4,575\n" +
+			"  rectangle triplet count: 11,756\n" +
+			"  maximum triangle triplets: 153\n" +
+			"  maximum rectangle triplets: 391\n";
 
-		String[] arguments = new String[]{"--algorithm", "GraphMetrics", "--order", "undirected",
-				"--input", "RMatGraph", "--type", "integer", "--simplify", "undirected",
-				"--output"};
-
-		expectedOutput(ArrayUtils.addAll(arguments, "hash"), expected);
-		expectedOutput(ArrayUtils.addAll(arguments, "print"), expected);
+		expectedOutput(parameters(7, "undirected", "hash"), expected);
+		expectedOutput(parameters(7, "undirected", "print"), expected);
 	}
 }

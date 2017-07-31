@@ -21,19 +21,24 @@ package org.apache.flink.runtime.executiongraph;
 import org.apache.flink.api.common.ExecutionConfig;
 import org.apache.flink.api.common.JobID;
 import org.apache.flink.api.common.time.Time;
-import org.apache.flink.configuration.CoreOptions;
-import org.apache.flink.configuration.ConfigConstants;
 import org.apache.flink.configuration.Configuration;
+import org.apache.flink.configuration.CoreOptions;
 import org.apache.flink.configuration.IllegalConfigurationException;
+import org.apache.flink.configuration.JobManagerOptions;
 import org.apache.flink.metrics.MetricGroup;
 import org.apache.flink.runtime.JobException;
 import org.apache.flink.runtime.checkpoint.CheckpointIDCounter;
 import org.apache.flink.runtime.checkpoint.CheckpointRecoveryFactory;
-import org.apache.flink.runtime.checkpoint.CompletedCheckpointStore;
 import org.apache.flink.runtime.checkpoint.CheckpointStatsTracker;
+import org.apache.flink.runtime.checkpoint.CompletedCheckpointStore;
+import org.apache.flink.runtime.checkpoint.MasterTriggerRestoreHook;
+import org.apache.flink.runtime.checkpoint.hooks.MasterHooks;
 import org.apache.flink.runtime.client.JobExecutionException;
 import org.apache.flink.runtime.client.JobSubmissionException;
+import org.apache.flink.runtime.executiongraph.failover.FailoverStrategy;
+import org.apache.flink.runtime.executiongraph.failover.FailoverStrategyLoader;
 import org.apache.flink.runtime.executiongraph.metrics.DownTimeGauge;
+import org.apache.flink.runtime.executiongraph.metrics.NumberOfFullRestartsGauge;
 import org.apache.flink.runtime.executiongraph.metrics.RestartTimeGauge;
 import org.apache.flink.runtime.executiongraph.metrics.UpTimeGauge;
 import org.apache.flink.runtime.executiongraph.restart.RestartStrategy;
@@ -42,15 +47,19 @@ import org.apache.flink.runtime.jobgraph.JobGraph;
 import org.apache.flink.runtime.jobgraph.JobVertex;
 import org.apache.flink.runtime.jobgraph.JobVertexID;
 import org.apache.flink.runtime.jobgraph.jsonplan.JsonPlanGenerator;
-import org.apache.flink.runtime.jobgraph.tasks.JobSnapshottingSettings;
+import org.apache.flink.runtime.jobgraph.tasks.JobCheckpointingSettings;
 import org.apache.flink.runtime.state.AbstractStateBackend;
 import org.apache.flink.runtime.state.StateBackend;
 import org.apache.flink.util.DynamicCodeLoadingException;
+import org.apache.flink.util.SerializedValue;
+
 import org.slf4j.Logger;
 
 import javax.annotation.Nullable;
+
 import java.io.IOException;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.Executor;
 import java.util.concurrent.ScheduledExecutorService;
@@ -88,6 +97,9 @@ public class ExecutionGraphBuilder {
 		final String jobName = jobGraph.getName();
 		final JobID jobId = jobGraph.getJobID();
 
+		final FailoverStrategy.Factory failoverStrategy = 
+				FailoverStrategyLoader.loadFailoverStrategy(jobManagerConfig, log);
+
 		// create a new execution graph, if none exists so far
 		final ExecutionGraph executionGraph = (prior != null) ? prior :
 				new ExecutionGraph(
@@ -99,6 +111,7 @@ public class ExecutionGraphBuilder {
 						jobGraph.getSerializedExecutionConfig(),
 						timeout,
 						restartStrategy,
+						failoverStrategy,
 						jobGraph.getUserJarBlobKeys(),
 						jobGraph.getClasspaths(),
 						slotProvider,
@@ -159,7 +172,7 @@ public class ExecutionGraphBuilder {
 		}
 
 		// configure the state checkpointing
-		JobSnapshottingSettings snapshotSettings = jobGraph.getSnapshotSettings();
+		JobCheckpointingSettings snapshotSettings = jobGraph.getCheckpointingSettings();
 		if (snapshotSettings != null) {
 			List<ExecutionJobVertex> triggerVertices = 
 					idToVertex(snapshotSettings.getVerticesToTrigger(), executionGraph);
@@ -195,9 +208,7 @@ public class ExecutionGraphBuilder {
 			}
 
 			// Maximum number of remembered checkpoints
-			int historySize = jobManagerConfig.getInteger(
-					ConfigConstants.JOB_MANAGER_WEB_CHECKPOINTS_HISTORY_SIZE,
-					ConfigConstants.DEFAULT_JOB_MANAGER_WEB_CHECKPOINTS_HISTORY_SIZE);
+			int historySize = jobManagerConfig.getInteger(JobManagerOptions.WEB_CHECKPOINTS_HISTORY_SIZE);
 
 			CheckpointStatsTracker checkpointStatsTracker = new CheckpointStatsTracker(
 					historySize,
@@ -206,27 +217,60 @@ public class ExecutionGraphBuilder {
 					metrics);
 
 			// The default directory for externalized checkpoints
-			String externalizedCheckpointsDir = jobManagerConfig.getString(
-					ConfigConstants.CHECKPOINTS_DIRECTORY_KEY, null);
+			String externalizedCheckpointsDir = jobManagerConfig.getString(CoreOptions.CHECKPOINTS_DIRECTORY);
 
 			// load the state backend for checkpoint metadata.
 			// if specified in the application, use from there, otherwise load from configuration
 			final StateBackend metadataBackend;
 
-			final StateBackend applicationConfiguredBackend = snapshotSettings.getDefaultStateBackend();
+			final SerializedValue<StateBackend> applicationConfiguredBackend = snapshotSettings.getDefaultStateBackend();
 			if (applicationConfiguredBackend != null) {
-				metadataBackend = applicationConfiguredBackend;
+				try {
+					metadataBackend = applicationConfiguredBackend.deserializeValue(classLoader);
+				} catch (IOException | ClassNotFoundException e) {
+					throw new JobExecutionException(jobId, "Could not instantiate configured state backend.", e);
+				}
 
 				log.info("Using application-defined state backend for checkpoint/savepoint metadata: {}.",
-						applicationConfiguredBackend);
-			}
-			else {
+					metadataBackend);
+			} else {
 				try {
 					metadataBackend = AbstractStateBackend
 							.loadStateBackendFromConfigOrCreateDefault(jobManagerConfig, classLoader, log);
-				}
-				catch (IllegalConfigurationException | IOException | DynamicCodeLoadingException e) {
+				} catch (IllegalConfigurationException | IOException | DynamicCodeLoadingException e) {
 					throw new JobExecutionException(jobId, "Could not instantiate configured state backend", e);
+				}
+			}
+
+			// instantiate the user-defined checkpoint hooks
+
+			final SerializedValue<MasterTriggerRestoreHook.Factory[]> serializedHooks = snapshotSettings.getMasterHooks();
+			final List<MasterTriggerRestoreHook<?>> hooks;
+
+			if (serializedHooks == null) {
+				hooks = Collections.emptyList();
+			}
+			else {
+				final MasterTriggerRestoreHook.Factory[] hookFactories;
+				try {
+					hookFactories = serializedHooks.deserializeValue(classLoader);
+				}
+				catch (IOException | ClassNotFoundException e) {
+					throw new JobExecutionException(jobId, "Could not instantiate user-defined checkpoint hooks", e);
+				}
+
+				final Thread thread = Thread.currentThread();
+				final ClassLoader originalClassLoader = thread.getContextClassLoader();
+				thread.setContextClassLoader(classLoader);
+
+				try {
+					hooks = new ArrayList<>(hookFactories.length);
+					for (MasterTriggerRestoreHook.Factory factory : hookFactories) {
+						hooks.add(MasterHooks.wrapHook(factory.create(), classLoader));
+					}
+				}
+				finally {
+					thread.setContextClassLoader(originalClassLoader);
 				}
 			}
 
@@ -239,6 +283,7 @@ public class ExecutionGraphBuilder {
 					triggerVertices,
 					ackVertices,
 					confirmVertices,
+					hooks,
 					checkpointIdCounter,
 					completedCheckpoints,
 					externalizedCheckpointsDir,
@@ -251,6 +296,9 @@ public class ExecutionGraphBuilder {
 		metrics.gauge(RestartTimeGauge.METRIC_NAME, new RestartTimeGauge(executionGraph));
 		metrics.gauge(DownTimeGauge.METRIC_NAME, new DownTimeGauge(executionGraph));
 		metrics.gauge(UpTimeGauge.METRIC_NAME, new UpTimeGauge(executionGraph));
+		metrics.gauge(NumberOfFullRestartsGauge.METRIC_NAME, new NumberOfFullRestartsGauge(executionGraph));
+
+		executionGraph.getFailoverStrategy().registerMetrics(metrics);
 
 		return executionGraph;
 	}

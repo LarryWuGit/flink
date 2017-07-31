@@ -15,51 +15,57 @@
  * limitations under the License.
  */
 
-
 package org.apache.flink.streaming.connectors.kafka;
 
+import org.apache.flink.streaming.api.datastream.DataStream;
+import org.apache.flink.streaming.api.datastream.DataStreamSink;
+import org.apache.flink.streaming.api.operators.StreamSink;
+import org.apache.flink.streaming.connectors.kafka.partitioner.FlinkKafkaPartitioner;
+import org.apache.flink.streaming.connectors.kafka.testutils.ZooKeeperStringSerializer;
+import org.apache.flink.streaming.util.serialization.KeyedDeserializationSchema;
+import org.apache.flink.streaming.util.serialization.KeyedSerializationSchema;
+import org.apache.flink.util.NetUtils;
+
 import kafka.admin.AdminUtils;
-import kafka.common.KafkaException;
 import kafka.api.PartitionMetadata;
+import kafka.common.KafkaException;
 import kafka.network.SocketServer;
 import kafka.server.KafkaConfig;
 import kafka.server.KafkaServer;
 import kafka.utils.SystemTime$;
 import kafka.utils.ZkUtils;
 import org.I0Itec.zkclient.ZkClient;
+import org.apache.commons.collections.list.UnmodifiableList;
 import org.apache.commons.io.FileUtils;
 import org.apache.curator.test.TestingServer;
-import org.apache.flink.streaming.api.datastream.DataStream;
-import org.apache.flink.streaming.api.datastream.DataStreamSink;
-import org.apache.flink.streaming.api.operators.StreamSink;
-import org.apache.flink.streaming.connectors.kafka.testutils.ZooKeeperStringSerializer;
-import org.apache.flink.streaming.connectors.kafka.partitioner.KafkaPartitioner;
-import org.apache.flink.streaming.util.serialization.KeyedDeserializationSchema;
-import org.apache.flink.streaming.util.serialization.KeyedSerializationSchema;
-import org.apache.flink.util.NetUtils;
+import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.kafka.clients.consumer.KafkaConsumer;
 import org.apache.kafka.clients.consumer.OffsetAndMetadata;
 import org.apache.kafka.common.TopicPartition;
 import org.apache.kafka.common.protocol.SecurityProtocol;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import scala.collection.Seq;
 
 import java.io.File;
 import java.net.BindException;
 import java.util.ArrayList;
-import java.util.Map;
+import java.util.Arrays;
+import java.util.Collection;
 import java.util.HashMap;
+import java.util.Iterator;
 import java.util.List;
+import java.util.Map;
 import java.util.Properties;
 import java.util.UUID;
+
+import scala.collection.Seq;
 
 import static org.apache.flink.util.NetUtils.hostAndPortToUrlString;
 import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
 
 /**
- * An implementation of the KafkaServerProvider for Kafka 0.9
+ * An implementation of the KafkaServerProvider for Kafka 0.9 .
  */
 public class KafkaTestEnvironmentImpl extends KafkaTestEnvironment {
 
@@ -102,21 +108,52 @@ public class KafkaTestEnvironmentImpl extends KafkaTestEnvironment {
 	}
 
 	@Override
+	public <K, V> Collection<ConsumerRecord<K, V>> getAllRecordsFromTopic(Properties properties, String topic, int partition, long timeout) {
+		List<ConsumerRecord<K, V>> result = new ArrayList<>();
+		try (KafkaConsumer<K, V> consumer = new KafkaConsumer<>(properties)) {
+			consumer.assign(Arrays.asList(new TopicPartition(topic, partition)));
+
+			while (true) {
+				boolean processedAtLeastOneRecord = false;
+
+				Iterator<ConsumerRecord<K, V>> iterator = consumer.poll(timeout).iterator();
+				while (iterator.hasNext()) {
+					ConsumerRecord<K, V> record = iterator.next();
+					result.add(record);
+					processedAtLeastOneRecord = true;
+				}
+
+				if (!processedAtLeastOneRecord) {
+					break;
+				}
+			}
+			consumer.commitSync();
+		}
+
+		return UnmodifiableList.decorate(result);
+	}
+
+	@Override
 	public <T> StreamSink<T> getProducerSink(
 			String topic,
 			KeyedSerializationSchema<T> serSchema,
 			Properties props,
-			KafkaPartitioner<T> partitioner) {
+			FlinkKafkaPartitioner<T> partitioner) {
 		FlinkKafkaProducer09<T> prod = new FlinkKafkaProducer09<>(topic, serSchema, props, partitioner);
 		prod.setFlushOnCheckpoint(true);
 		return new StreamSink<>(prod);
 	}
 
 	@Override
-	public <T> DataStreamSink<T> produceIntoKafka(DataStream<T> stream, String topic, KeyedSerializationSchema<T> serSchema, Properties props, KafkaPartitioner<T> partitioner) {
+	public <T> DataStreamSink<T> produceIntoKafka(DataStream<T> stream, String topic, KeyedSerializationSchema<T> serSchema, Properties props, FlinkKafkaPartitioner<T> partitioner) {
 		FlinkKafkaProducer09<T> prod = new FlinkKafkaProducer09<>(topic, serSchema, props, partitioner);
 		prod.setFlushOnCheckpoint(true);
 		return stream.addSink(prod);
+	}
+
+	@Override
+	public <T> DataStreamSink<T> writeToKafkaWithTimestamps(DataStream<T> stream, String topic, KeyedSerializationSchema<T> serSchema, Properties props) {
+		throw new UnsupportedOperationException();
 	}
 
 	@Override
@@ -166,7 +203,7 @@ public class KafkaTestEnvironmentImpl extends KafkaTestEnvironment {
 	public void prepare(int numKafkaServers, Properties additionalServerProperties, boolean secureMode) {
 
 		//increase the timeout since in Travis ZK connection takes long time for secure connection.
-		if(secureMode) {
+		if (secureMode) {
 			//run only one kafka server to avoid multiple ZK connections from many instances - Travis timeout
 			numKafkaServers = 1;
 			zkTimeout = String.valueOf(Integer.parseInt(zkTimeout) * 15);
@@ -179,7 +216,7 @@ public class KafkaTestEnvironmentImpl extends KafkaTestEnvironment {
 		tmpZkDir = new File(tempDir, "kafkaITcase-zk-dir-" + (UUID.randomUUID().toString()));
 		assertTrue("cannot create zookeeper temp dir", tmpZkDir.mkdirs());
 
-		tmpKafkaParent = new File(tempDir, "kafkaITcase-kafka-dir*" + (UUID.randomUUID().toString()));
+		tmpKafkaParent = new File(tempDir, "kafkaITcase-kafka-dir-" + (UUID.randomUUID().toString()));
 		assertTrue("cannot create kafka temp dir", tmpKafkaParent.mkdirs());
 
 		tmpKafkaDirs = new ArrayList<>(numKafkaServers);
@@ -205,7 +242,7 @@ public class KafkaTestEnvironmentImpl extends KafkaTestEnvironment {
 				brokers.add(getKafkaServer(i, tmpKafkaDirs.get(i)));
 
 				SocketServer socketServer = brokers.get(i).socketServer();
-				if(secureMode) {
+				if (secureMode) {
 					brokerConnectionString += hostAndPortToUrlString(KafkaTestEnvironment.KAFKA_HOST, brokers.get(i).socketServer().boundPort(SecurityProtocol.SASL_PLAINTEXT)) + ",";
 				} else {
 					brokerConnectionString += hostAndPortToUrlString(KafkaTestEnvironment.KAFKA_HOST, brokers.get(i).socketServer().boundPort(SecurityProtocol.PLAINTEXT)) + ",";
@@ -298,7 +335,7 @@ public class KafkaTestEnvironmentImpl extends KafkaTestEnvironment {
 		final long deadline = System.nanoTime() + Integer.parseInt(zkTimeout) * 1_000_000L;
 		do {
 			try {
-				if(secureMode) {
+				if (secureMode) {
 					//increase wait time since in Travis ZK timeout occurs frequently
 					int wait = Integer.parseInt(zkTimeout) / 100;
 					LOG.info("waiting for {} msecs before the topic {} can be checked", wait, topic);
@@ -317,7 +354,7 @@ public class KafkaTestEnvironmentImpl extends KafkaTestEnvironment {
 
 			// create a new ZK utils connection
 			ZkUtils checkZKConn = getZkUtils();
-			if(AdminUtils.topicExists(checkZKConn, topic)) {
+			if (AdminUtils.topicExists(checkZKConn, topic)) {
 				LOG.info("topic {} has been created successfully", topic);
 				checkZKConn.close();
 				return;
@@ -347,7 +384,7 @@ public class KafkaTestEnvironmentImpl extends KafkaTestEnvironment {
 	}
 
 	/**
-	 * Copied from com.github.sakserv.minicluster.KafkaLocalBrokerIntegrationTest (ASL licensed)
+	 * Copied from com.github.sakserv.minicluster.KafkaLocalBrokerIntegrationTest (ASL licensed).
 	 */
 	protected KafkaServer getKafkaServer(int brokerId, File tmpFolder) throws Exception {
 		Properties kafkaProperties = new Properties();
@@ -363,7 +400,7 @@ public class KafkaTestEnvironmentImpl extends KafkaTestEnvironment {
 		// for CI stability, increase zookeeper session timeout
 		kafkaProperties.put("zookeeper.session.timeout.ms", zkTimeout);
 		kafkaProperties.put("zookeeper.connection.timeout.ms", zkTimeout);
-		if(additionalServerProperties != null) {
+		if (additionalServerProperties != null) {
 			kafkaProperties.putAll(additionalServerProperties);
 		}
 
@@ -374,7 +411,7 @@ public class KafkaTestEnvironmentImpl extends KafkaTestEnvironment {
 			kafkaProperties.put("port", Integer.toString(kafkaPort));
 
 			//to support secure kafka cluster
-			if(secureMode) {
+			if (secureMode) {
 				LOG.info("Adding Kafka secure configurations");
 				kafkaProperties.put("listeners", "SASL_PLAINTEXT://" + KAFKA_HOST + ":" + kafkaPort);
 				kafkaProperties.put("advertised.listeners", "SASL_PLAINTEXT://" + KAFKA_HOST + ":" + kafkaPort);
@@ -405,7 +442,7 @@ public class KafkaTestEnvironmentImpl extends KafkaTestEnvironment {
 
 	public Properties getSecureProperties() {
 		Properties prop = new Properties();
-		if(secureMode) {
+		if (secureMode) {
 			prop.put("security.inter.broker.protocol", "SASL_PLAINTEXT");
 			prop.put("security.protocol", "SASL_PLAINTEXT");
 			prop.put("sasl.kerberos.service.name", "kafka");
@@ -413,7 +450,7 @@ public class KafkaTestEnvironmentImpl extends KafkaTestEnvironment {
 			//add special timeout for Travis
 			prop.setProperty("zookeeper.session.timeout.ms", zkTimeout);
 			prop.setProperty("zookeeper.connection.timeout.ms", zkTimeout);
-			prop.setProperty("metadata.fetch.timeout.ms","120000");
+			prop.setProperty("metadata.fetch.timeout.ms", "120000");
 		}
 		return prop;
 	}

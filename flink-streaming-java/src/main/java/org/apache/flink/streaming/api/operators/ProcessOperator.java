@@ -27,6 +27,10 @@ import org.apache.flink.util.OutputTag;
 
 import static org.apache.flink.util.Preconditions.checkState;
 
+/**
+ * A {@link org.apache.flink.streaming.api.operators.StreamOperator} for executing
+ * {@link ProcessFunction ProcessFunctions}.
+ */
 @Internal
 public class ProcessOperator<IN, OUT>
 		extends AbstractUdfStreamOperator<OUT, ProcessFunction<IN, OUT>>
@@ -95,6 +99,9 @@ public class ProcessOperator<IN, OUT>
 
 		@Override
 		public <X> void output(OutputTag<X> outputTag, X value) {
+			if (outputTag == null) {
+				throw new IllegalArgumentException("OutputTag must not be null.");
+			}
 			output.collect(outputTag, new StreamRecord<>(value, element.getTimestamp()));
 		}
 

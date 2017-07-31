@@ -19,8 +19,13 @@
 package org.apache.flink.runtime.blob;
 
 import org.apache.flink.configuration.Configuration;
-import org.apache.flink.api.common.JobID;
+import org.apache.flink.core.testutils.CheckedThread;
+import org.apache.flink.runtime.concurrent.Future;
+import org.apache.flink.runtime.concurrent.FutureUtils;
+import org.apache.flink.runtime.concurrent.impl.FlinkCompletableFuture;
 import org.apache.flink.util.OperatingSystem;
+import org.apache.flink.util.Preconditions;
+import org.apache.flink.util.TestLogger;
 import org.junit.Test;
 
 import java.io.ByteArrayInputStream;
@@ -28,27 +33,107 @@ import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
 import java.net.InetSocketAddress;
+import java.util.ArrayList;
+import java.util.Collection;
+import java.util.Iterator;
 import java.util.Random;
+import java.util.concurrent.Callable;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
-import static org.junit.Assert.*;
+import static org.junit.Assert.assertArrayEquals;
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertTrue;
+import static org.junit.Assert.fail;
 import static org.junit.Assume.assumeTrue;
+import static org.mockito.Matchers.any;
+import static org.mockito.Matchers.eq;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
 
 /**
  * Tests for successful and failing PUT operations against the BLOB server,
  * and successful GET operations.
  */
-public class BlobServerPutTest {
+public class BlobServerPutTest extends TestLogger {
 
 	private final Random rnd = new Random();
 
+
+	// --- concurrency tests for utility methods which could fail during the put operation ---
+
+	/**
+	 * Checked thread that calls {@link BlobServer#getStorageLocation(BlobKey)}
+	 */
+	public static class ContentAddressableGetStorageLocation extends CheckedThread {
+		private final BlobServer server;
+		private final BlobKey key;
+
+		public ContentAddressableGetStorageLocation(BlobServer server, BlobKey key) {
+			this.server = server;
+			this.key = key;
+		}
+
+		@Override
+		public void go() throws Exception {
+			server.getStorageLocation(key);
+		}
+	}
+
+	/**
+	 * Tests concurrent calls to {@link BlobServer#getStorageLocation(BlobKey)}.
+	 */
 	@Test
-	public void testPutBufferSuccessful() {
+	public void testServerContentAddressableGetStorageLocationConcurrent() throws Exception {
+		BlobServer server = new BlobServer(new Configuration(), new VoidBlobStore());
+
+		try {
+			BlobKey key = new BlobKey();
+			CheckedThread[] threads = new CheckedThread[] {
+				new ContentAddressableGetStorageLocation(server, key),
+				new ContentAddressableGetStorageLocation(server, key),
+				new ContentAddressableGetStorageLocation(server, key)
+			};
+			checkedThreadSimpleTest(threads);
+		} finally {
+			server.close();
+		}
+	}
+
+	/**
+	 * Helper method to first start all threads and then wait for their completion.
+	 *
+	 * @param threads threads to use
+	 * @throws Exception exceptions that are thrown from the threads
+	 */
+	protected void checkedThreadSimpleTest(CheckedThread[] threads)
+		throws Exception {
+
+		// start all threads
+		for (CheckedThread t: threads) {
+			t.start();
+		}
+
+		// wait for thread completion and check exceptions
+		for (CheckedThread t: threads) {
+			t.sync();
+		}
+	}
+
+	// --------------------------------------------------------------------------------------------
+
+	@Test
+	public void testPutBufferSuccessful() throws IOException {
 		BlobServer server = null;
 		BlobClient client = null;
 
 		try {
 			Configuration config = new Configuration();
-			server = new BlobServer(config);
+			server = new BlobServer(config, new VoidBlobStore());
 
 			InetSocketAddress serverAddress = new InetSocketAddress("localhost", server.getPort());
 			client = new BlobClient(serverAddress, config);
@@ -62,11 +147,6 @@ public class BlobServerPutTest {
 
 			BlobKey key2 = client.put(data, 10, 44);
 			assertNotNull(key2);
-
-			// put under job and name scope
-			JobID jid = new JobID();
-			String stringKey = "my test key";
-			client.put(jid, stringKey, data);
 
 			// --- GET the data and check that it is equal ---
 
@@ -89,40 +169,25 @@ public class BlobServerPutTest {
 			BlobUtils.readFully(is2, result2, 0, result2.length, null);
 			is2.close();
 			assertArrayEquals(data, result2);
-
-			InputStream is3 = client.get(jid, stringKey);
-			byte[] result3 = new byte[data.length];
-			BlobUtils.readFully(is3, result3, 0, result3.length, null);
-			is3.close();
-			assertArrayEquals(data, result3);
-		}
-		catch (Exception e) {
-			e.printStackTrace();
-			fail(e.getMessage());
-		}
-		finally {
+		} finally {
 			if (client != null) {
-				try {
-					client.close();
-				} catch (Throwable t) {
-					t.printStackTrace();
-				}
+				client.close();
 			}
 			if (server != null) {
-				server.shutdown();
+				server.close();
 			}
 		}
 	}
 
 
 	@Test
-	public void testPutStreamSuccessful() {
+	public void testPutStreamSuccessful() throws IOException {
 		BlobServer server = null;
 		BlobClient client = null;
 
 		try {
 			Configuration config = new Configuration();
-			server = new BlobServer(config);
+			server = new BlobServer(config, new VoidBlobStore());
 
 			InetSocketAddress serverAddress = new InetSocketAddress("localhost", server.getPort());
 			client = new BlobClient(serverAddress, config);
@@ -134,21 +199,8 @@ public class BlobServerPutTest {
 			{
 				BlobKey key1 = client.put(new ByteArrayInputStream(data));
 				assertNotNull(key1);
-
 			}
-
-			// put under job and name scope
-			{
-				JobID jid = new JobID();
-				String stringKey = "my test key";
-				client.put(jid, stringKey, new ByteArrayInputStream(data));
-			}
-		}
-		catch (Exception e) {
-			e.printStackTrace();
-			fail(e.getMessage());
-		}
-		finally {
+		} finally {
 			if (client != null) {
 				try {
 					client.close();
@@ -157,19 +209,19 @@ public class BlobServerPutTest {
 				}
 			}
 			if (server != null) {
-				server.shutdown();
+				server.close();
 			}
 		}
 	}
 
 	@Test
-	public void testPutChunkedStreamSuccessful() {
+	public void testPutChunkedStreamSuccessful() throws IOException {
 		BlobServer server = null;
 		BlobClient client = null;
 
 		try {
 			Configuration config = new Configuration();
-			server = new BlobServer(config);
+			server = new BlobServer(config, new VoidBlobStore());
 
 			InetSocketAddress serverAddress = new InetSocketAddress("localhost", server.getPort());
 			client = new BlobClient(serverAddress, config);
@@ -181,36 +233,19 @@ public class BlobServerPutTest {
 			{
 				BlobKey key1 = client.put(new ChunkedInputStream(data, 19));
 				assertNotNull(key1);
-
 			}
-
-			// put under job and name scope
-			{
-				JobID jid = new JobID();
-				String stringKey = "my test key";
-				client.put(jid, stringKey, new ChunkedInputStream(data, 17));
-			}
-		}
-		catch (Exception e) {
-			e.printStackTrace();
-			fail(e.getMessage());
-		}
-		finally {
+		} finally {
 			if (client != null) {
-				try {
-					client.close();
-				} catch (Throwable t) {
-					t.printStackTrace();
-				}
+				client.close();
 			}
 			if (server != null) {
-				server.shutdown();
+				server.close();
 			}
 		}
 	}
 
 	@Test
-	public void testPutBufferFails() {
+	public void testPutBufferFails() throws IOException {
 		assumeTrue(!OperatingSystem.isWindows()); //setWritable doesn't work on Windows.
 
 		BlobServer server = null;
@@ -219,7 +254,7 @@ public class BlobServerPutTest {
 		File tempFileDir = null;
 		try {
 			Configuration config = new Configuration();
-			server = new BlobServer(config);
+			server = new BlobServer(config, new VoidBlobStore());
 
 			// make sure the blob server cannot create any files in its storage dir
 			tempFileDir = server.createTemporaryFilename().getParentFile().getParentFile();
@@ -250,92 +285,105 @@ public class BlobServerPutTest {
 				// expected
 			}
 
-		}
-		catch (Exception e) {
-			e.printStackTrace();
-			fail(e.getMessage());
-		}
-		finally {
+		} finally {
 			// set writable again to make sure we can remove the directory
 			if (tempFileDir != null) {
 				tempFileDir.setWritable(true, false);
 			}
 			if (client != null) {
-				try {
-					client.close();
-				} catch (Throwable t) {
-					t.printStackTrace();
-				}
+				client.close();
 			}
 			if (server != null) {
-				server.shutdown();
+				server.close();
 			}
 		}
 	}
 
+	/**
+	 * FLINK-6020
+	 *
+	 * Tests that concurrent put operations will only upload the file once to the {@link BlobStore}.
+	 */
 	@Test
-	public void testPutNamedBufferFails() {
-		assumeTrue(!OperatingSystem.isWindows()); //setWritable doesn't work on Windows.
+	public void testConcurrentPutOperations() throws IOException, ExecutionException, InterruptedException {
+		final Configuration configuration = new Configuration();
+		BlobStore blobStore = mock(BlobStore.class);
+		int concurrentPutOperations = 2;
+		int dataSize = 1024;
 
-		BlobServer server = null;
-		BlobClient client = null;
+		final CountDownLatch countDownLatch = new CountDownLatch(concurrentPutOperations);
+		final byte[] data = new byte[dataSize];
 
-		File tempFileDir = null;
-		try {
-			Configuration config = new Configuration();
-			server = new BlobServer(config);
+		ArrayList<Future<BlobKey>> allFutures = new ArrayList(concurrentPutOperations);
 
-			// make sure the blob server cannot create any files in its storage dir
-			tempFileDir = server.createTemporaryFilename().getParentFile().getParentFile();
-			assertTrue(tempFileDir.setExecutable(true, false));
-			assertTrue(tempFileDir.setReadable(true, false));
-			assertTrue(tempFileDir.setWritable(false, false));
+		ExecutorService executor = Executors.newFixedThreadPool(concurrentPutOperations);
 
-			InetSocketAddress serverAddress = new InetSocketAddress("localhost", server.getPort());
-			client = new BlobClient(serverAddress, config);
+		try (
+			final BlobServer blobServer = new BlobServer(configuration, blobStore)) {
 
-			byte[] data = new byte[2000000];
-			rnd.nextBytes(data);
+			for (int i = 0; i < concurrentPutOperations; i++) {
+				Future<BlobKey> putFuture = FlinkCompletableFuture.supplyAsync(new Callable<BlobKey>() {
+					@Override
+					public BlobKey call() throws Exception {
+						try (BlobClient blobClient = blobServer.createClient()) {
+							return blobClient.put(new BlockingInputStream(countDownLatch, data));
+						}
+					}
+				}, executor);
 
-			// put under job and name scope
-			try {
-				JobID jid = new JobID();
-				String stringKey = "my test key";
-				client.put(jid, stringKey, data);
-				fail("This should fail.");
-			}
-			catch (IOException e) {
-				assertTrue(e.getMessage(), e.getMessage().contains("Server side error"));
+				allFutures.add(putFuture);
 			}
 
-			try {
-				JobID jid = new JobID();
-				String stringKey = "another key";
-				client.put(jid, stringKey, data);
-				fail("Client should be closed");
+			FutureUtils.ConjunctFuture<Collection<BlobKey>> conjunctFuture = FutureUtils.combineAll(allFutures);
+
+			// wait until all operations have completed and check that no exception was thrown
+			Collection<BlobKey> blobKeys = conjunctFuture.get();
+
+			Iterator<BlobKey> blobKeyIterator = blobKeys.iterator();
+
+			assertTrue(blobKeyIterator.hasNext());
+
+			BlobKey blobKey = blobKeyIterator.next();
+
+			// make sure that all blob keys are the same
+			while(blobKeyIterator.hasNext()) {
+				assertEquals(blobKey, blobKeyIterator.next());
 			}
-			catch (IllegalStateException e) {
-				// expected
-			}
+
+			// check that we only uploaded the file once to the blob store
+			verify(blobStore, times(1)).put(any(File.class), eq(blobKey));
+		} finally {
+			executor.shutdownNow();
 		}
-		catch (Exception e) {
-			e.printStackTrace();
-			fail(e.getMessage());
+	}
+
+	private static final class BlockingInputStream extends InputStream {
+
+		private final CountDownLatch countDownLatch;
+		private final byte[] data;
+		private int index = 0;
+
+		public BlockingInputStream(CountDownLatch countDownLatch, byte[] data) {
+			this.countDownLatch = Preconditions.checkNotNull(countDownLatch);
+			this.data = Preconditions.checkNotNull(data);
 		}
-		finally {
-			// set writable again to make sure we can remove the directory
-			if (tempFileDir != null) {
-				tempFileDir.setWritable(true, false);
+
+		@Override
+		public int read() throws IOException {
+
+			countDownLatch.countDown();
+
+			try {
+				countDownLatch.await();
+			} catch (InterruptedException e) {
+				Thread.currentThread().interrupt();
+				throw new IOException("Blocking operation was interrupted.", e);
 			}
-			if (client != null) {
-				try {
-					client.close();
-				} catch (Throwable t) {
-					t.printStackTrace();
-				}
-			}
-			if (server != null) {
-				server.shutdown();
+
+			if (index >= data.length) {
+				return -1;
+			} else {
+				return data[index++];
 			}
 		}
 	}

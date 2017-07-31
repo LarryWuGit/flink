@@ -18,8 +18,6 @@
 
 package org.apache.flink.runtime.security;
 
-import com.google.common.collect.Lists;
-import org.apache.commons.lang3.StringUtils;
 import org.apache.flink.annotation.VisibleForTesting;
 import org.apache.flink.api.java.hadoop.mapred.utils.HadoopUtils;
 import org.apache.flink.configuration.Configuration;
@@ -29,6 +27,9 @@ import org.apache.flink.runtime.security.modules.HadoopModule;
 import org.apache.flink.runtime.security.modules.JaasModule;
 import org.apache.flink.runtime.security.modules.SecurityModule;
 import org.apache.flink.runtime.security.modules.ZooKeeperModule;
+
+import com.google.common.collect.Lists;
+import org.apache.commons.lang3.StringUtils;
 import org.apache.hadoop.security.UserGroupInformation;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -41,9 +42,8 @@ import java.util.List;
 
 import static org.apache.flink.util.Preconditions.checkNotNull;
 
-/*
+/**
  * Utils for configuring security. The following security subsystems are supported:
- *
  * 1. Java Authentication and Authorization Service (JAAS)
  * 2. Hadoop's User Group Information (UGI)
  * 3. ZooKeeper's process-wide security settings.
@@ -56,7 +56,9 @@ public class SecurityUtils {
 
 	private static List<SecurityModule> installedModules = null;
 
-	public static SecurityContext getInstalledContext() { return installedContext; }
+	public static SecurityContext getInstalledContext() {
+		return installedContext;
+	}
 
 	@VisibleForTesting
 	static List<SecurityModule> getInstalledModules() {
@@ -66,7 +68,7 @@ public class SecurityUtils {
 	/**
 	 * Installs a process-wide security configuration.
 	 *
-	 * Applies the configuration using the available security modules (i.e. Hadoop, JAAS).
+	 * <p>Applies the configuration using the available security modules (i.e. Hadoop, JAAS).
 	 */
 	public static void install(SecurityConfiguration config) throws Exception {
 
@@ -79,7 +81,7 @@ public class SecurityUtils {
 				modules.add(module);
 			}
 		}
-		catch(Exception ex) {
+		catch (Exception ex) {
 			throw new Exception("unable to establish the security context", ex);
 		}
 		installedModules = modules;
@@ -94,14 +96,14 @@ public class SecurityUtils {
 	}
 
 	static void uninstall() {
-		if(installedModules != null) {
+		if (installedModules != null) {
 			for (SecurityModule module : Lists.reverse(installedModules)) {
 				try {
 					module.uninstall();
 				}
-				catch(UnsupportedOperationException ignored) {
+				catch (UnsupportedOperationException ignored) {
 				}
-				catch(SecurityModule.SecurityInstallException e) {
+				catch (SecurityModule.SecurityInstallException e) {
 					LOG.warn("unable to uninstall a security module", e);
 				}
 			}
@@ -114,7 +116,7 @@ public class SecurityUtils {
 	/**
 	 * The global security configuration.
 	 *
-	 * See {@link SecurityOptions} for corresponding configuration options.
+	 * <p>See {@link SecurityOptions} for corresponding configuration options.
 	 */
 	public static class SecurityConfiguration {
 
@@ -124,6 +126,8 @@ public class SecurityUtils {
 		private final List<Class<? extends SecurityModule>> securityModules;
 
 		private final org.apache.hadoop.conf.Configuration hadoopConf;
+
+		private final boolean isZkSaslDisable;
 
 		private final boolean useTicketCache;
 
@@ -142,7 +146,7 @@ public class SecurityUtils {
 		 * @param flinkConf the Flink global configuration.
          */
 		public SecurityConfiguration(Configuration flinkConf) {
-			this(flinkConf, HadoopUtils.getHadoopConfiguration());
+			this(flinkConf, HadoopUtils.getHadoopConfiguration(flinkConf));
 		}
 
 		/**
@@ -164,6 +168,7 @@ public class SecurityUtils {
 				org.apache.hadoop.conf.Configuration hadoopConf,
 				List<? extends Class<? extends SecurityModule>> securityModules) {
 			this.hadoopConf = checkNotNull(hadoopConf);
+			this.isZkSaslDisable = flinkConf.getBoolean(SecurityOptions.ZOOKEEPER_SASL_DISABLE);
 			this.keytab = flinkConf.getString(SecurityOptions.KERBEROS_LOGIN_KEYTAB);
 			this.principal = flinkConf.getString(SecurityOptions.KERBEROS_LOGIN_PRINCIPAL);
 			this.useTicketCache = flinkConf.getBoolean(SecurityOptions.KERBEROS_LOGIN_USETICKETCACHE);
@@ -173,6 +178,10 @@ public class SecurityUtils {
 			this.securityModules = Collections.unmodifiableList(securityModules);
 
 			validate();
+		}
+
+		public boolean isZkSaslDisable() {
+			return isZkSaslDisable;
 		}
 
 		public String getKeytab() {
@@ -208,25 +217,29 @@ public class SecurityUtils {
 		}
 
 		private void validate() {
-			if(!StringUtils.isBlank(keytab)) {
+			if (!StringUtils.isBlank(keytab)) {
 				// principal is required
-				if(StringUtils.isBlank(principal)) {
+				if (StringUtils.isBlank(principal)) {
 					throw new IllegalConfigurationException("Kerberos login configuration is invalid; keytab requires a principal.");
 				}
 
 				// check the keytab is readable
 				File keytabFile = new File(keytab);
-				if(!keytabFile.exists() || !keytabFile.isFile() || !keytabFile.canRead()) {
+				if (!keytabFile.exists() || !keytabFile.isFile() || !keytabFile.canRead()) {
 					throw new IllegalConfigurationException("Kerberos login configuration is invalid; keytab is unreadable");
 				}
 			}
 		}
 
 		private static List<String> parseList(String value) {
-			if(value == null) {
+			if (value == null || value.isEmpty()) {
 				return Collections.emptyList();
 			}
-			return Arrays.asList(value.split(","));
+
+			return Arrays.asList(value
+				.trim()
+				.replaceAll("(\\s*,+\\s*)+", ",")
+				.split(","));
 		}
 	}
 

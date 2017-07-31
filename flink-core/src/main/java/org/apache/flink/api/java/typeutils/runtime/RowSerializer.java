@@ -18,13 +18,22 @@
 package org.apache.flink.api.java.typeutils.runtime;
 
 import org.apache.flink.annotation.Internal;
+import org.apache.flink.api.common.typeutils.CompatibilityResult;
+import org.apache.flink.api.common.typeutils.CompatibilityUtil;
+import org.apache.flink.api.common.typeutils.CompositeTypeSerializerConfigSnapshot;
+import org.apache.flink.api.common.typeutils.TypeDeserializerAdapter;
 import org.apache.flink.api.common.typeutils.TypeSerializer;
+import org.apache.flink.api.common.typeutils.TypeSerializerConfigSnapshot;
+import org.apache.flink.api.common.typeutils.UnloadableDummyTypeSerializer;
+import org.apache.flink.api.java.tuple.Tuple2;
 import org.apache.flink.core.memory.DataInputView;
 import org.apache.flink.core.memory.DataOutputView;
 import org.apache.flink.types.Row;
 
 import java.io.IOException;
+import java.io.ObjectInputStream;
 import java.util.Arrays;
+import java.util.List;
 
 import static org.apache.flink.api.java.typeutils.runtime.NullMaskUtils.readIntoAndCopyNullMask;
 import static org.apache.flink.api.java.typeutils.runtime.NullMaskUtils.readIntoNullMask;
@@ -35,12 +44,15 @@ import static org.apache.flink.util.Preconditions.checkNotNull;
  * Serializer for {@link Row}.
  */
 @Internal
-public class RowSerializer extends TypeSerializer<Row> {
+public final class RowSerializer extends TypeSerializer<Row> {
 
 	private static final long serialVersionUID = 1L;
-	private final boolean[] nullMask;
+
 	private final TypeSerializer<Object>[] fieldSerializers;
 
+	private transient boolean[] nullMask;
+
+	@SuppressWarnings("unchecked")
 	public RowSerializer(TypeSerializer<?>[] fieldSerializers) {
 		this.fieldSerializers = (TypeSerializer<Object>[]) checkNotNull(fieldSerializers);
 		this.nullMask = new boolean[fieldSerializers.length];
@@ -53,22 +65,11 @@ public class RowSerializer extends TypeSerializer<Row> {
 
 	@Override
 	public TypeSerializer<Row> duplicate() {
-		boolean stateful = false;
 		TypeSerializer<?>[] duplicateFieldSerializers = new TypeSerializer[fieldSerializers.length];
-
 		for (int i = 0; i < fieldSerializers.length; i++) {
 			duplicateFieldSerializers[i] = fieldSerializers[i].duplicate();
-			if (duplicateFieldSerializers[i] != fieldSerializers[i]) {
-				// at least one of them is stateful
-				stateful = true;
-			}
 		}
-
-		if (stateful) {
-			return new RowSerializer(duplicateFieldSerializers);
-		} else {
-			return this;
-		}
+		return new RowSerializer(duplicateFieldSerializers);
 	}
 
 	@Override
@@ -241,5 +242,83 @@ public class RowSerializer extends TypeSerializer<Row> {
 	@Override
 	public int hashCode() {
 		return Arrays.hashCode(fieldSerializers);
+	}
+
+	// --------------------------------------------------------------------------------------------
+
+	private void readObject(ObjectInputStream in) throws IOException, ClassNotFoundException {
+		in.defaultReadObject();
+		this.nullMask = new boolean[fieldSerializers.length];
+	}
+
+	// --------------------------------------------------------------------------------------------
+	// Serializer configuration snapshotting & compatibility
+	// --------------------------------------------------------------------------------------------
+
+	@Override
+	public RowSerializerConfigSnapshot snapshotConfiguration() {
+		return new RowSerializerConfigSnapshot(fieldSerializers);
+	}
+
+	@Override
+	public CompatibilityResult<Row> ensureCompatibility(TypeSerializerConfigSnapshot configSnapshot) {
+		if (configSnapshot instanceof RowSerializerConfigSnapshot) {
+			List<Tuple2<TypeSerializer<?>, TypeSerializerConfigSnapshot>> previousFieldSerializersAndConfigs =
+				((RowSerializerConfigSnapshot) configSnapshot).getNestedSerializersAndConfigs();
+
+			if (previousFieldSerializersAndConfigs.size() == fieldSerializers.length) {
+				boolean requireMigration = false;
+				TypeSerializer<?>[] convertDeserializers = new TypeSerializer<?>[fieldSerializers.length];
+
+				CompatibilityResult<?> compatResult;
+				int i = 0;
+				for (Tuple2<TypeSerializer<?>, TypeSerializerConfigSnapshot> f : previousFieldSerializersAndConfigs) {
+					compatResult = CompatibilityUtil.resolveCompatibilityResult(
+							f.f0,
+							UnloadableDummyTypeSerializer.class,
+							f.f1,
+							fieldSerializers[i]);
+
+					if (compatResult.isRequiresMigration()) {
+						requireMigration = true;
+
+						if (compatResult.getConvertDeserializer() == null) {
+							// one of the field serializers cannot provide a fallback deserializer
+							return CompatibilityResult.requiresMigration();
+						} else {
+							convertDeserializers[i] =
+								new TypeDeserializerAdapter<>(compatResult.getConvertDeserializer());
+						}
+					}
+
+					i++;
+				}
+
+				if (requireMigration) {
+					return CompatibilityResult.requiresMigration(new RowSerializer(convertDeserializers));
+				} else {
+					return CompatibilityResult.compatible();
+				}
+			}
+		}
+
+		return CompatibilityResult.requiresMigration();
+	}
+
+	public static final class RowSerializerConfigSnapshot extends CompositeTypeSerializerConfigSnapshot {
+
+		private static final int VERSION = 1;
+
+		/** This empty nullary constructor is required for deserializing the configuration. */
+		public RowSerializerConfigSnapshot() {}
+
+		public RowSerializerConfigSnapshot(TypeSerializer[] fieldSerializers) {
+			super(fieldSerializers);
+		}
+
+		@Override
+		public int getVersion() {
+			return VERSION;
+		}
 	}
 }

@@ -22,7 +22,7 @@ import org.apache.flink.api.common.JobID;
 import org.apache.flink.runtime.blob.BlobStore;
 import org.apache.flink.runtime.blob.VoidBlobStore;
 import org.apache.flink.runtime.checkpoint.CheckpointRecoveryFactory;
-import org.apache.flink.runtime.highavailability.nonha.NonHaRegistry;
+import org.apache.flink.runtime.highavailability.nonha.standalone.StandaloneRunningJobsRegistry;
 import org.apache.flink.runtime.jobmanager.SubmittedJobGraphStore;
 import org.apache.flink.runtime.leaderelection.LeaderElectionService;
 import org.apache.flink.runtime.leaderretrieval.LeaderRetrievalService;
@@ -101,6 +101,11 @@ public class TestingHighAvailabilityServices implements HighAvailabilityServices
 	}
 
 	@Override
+	public LeaderRetrievalService getJobManagerLeaderRetriever(JobID jobID, String defaultJobManagerAddress) {
+		return getJobManagerLeaderRetriever(jobID);
+	}
+
+	@Override
 	public LeaderElectionService getResourceManagerLeaderElectionService() {
 		LeaderElectionService service = resourceManagerLeaderElectionService;
 
@@ -147,17 +152,12 @@ public class TestingHighAvailabilityServices implements HighAvailabilityServices
 
 	@Override
 	public RunningJobsRegistry getRunningJobsRegistry() {
-		return new NonHaRegistry();
+		return new StandaloneRunningJobsRegistry();
 	}
 
 	@Override
 	public BlobStore createBlobStore() throws IOException {
 		return new VoidBlobStore();
-	}
-
-	@Override
-	public String getResourceManagerEndpointName() {
-		throw new UnsupportedOperationException();
 	}
 
 	// ------------------------------------------------------------------------

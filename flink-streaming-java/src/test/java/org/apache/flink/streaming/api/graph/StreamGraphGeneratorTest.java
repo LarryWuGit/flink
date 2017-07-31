@@ -44,6 +44,7 @@ import org.apache.flink.streaming.runtime.streamrecord.StreamRecord;
 import org.apache.flink.streaming.runtime.tasks.StreamTask;
 import org.apache.flink.streaming.util.EvenOddOutputSelector;
 import org.apache.flink.streaming.util.NoOpIntMap;
+
 import org.junit.Test;
 
 import static org.junit.Assert.assertEquals;
@@ -59,8 +60,7 @@ public class StreamGraphGeneratorTest {
 	/**
 	 * This tests whether virtual Transformations behave correctly.
 	 *
-	 * <p>
-	 * Verifies that partitioning, output selector, selected names are correctly set in the
+	 * <p>Verifies that partitioning, output selector, selected names are correctly set in the
 	 * StreamGraph when they are intermixed.
 	 */
 	@Test
@@ -111,7 +111,6 @@ public class StreamGraphGeneratorTest {
 				.select("even")
 				.shuffle();
 
-
 		SingleOutputStreamOperator<Integer> unionedMap = map1.union(map2).union(map3)
 				.map(new NoOpIntMap());
 
@@ -143,7 +142,7 @@ public class StreamGraphGeneratorTest {
 	/**
 	 * This tests whether virtual Transformations behave correctly.
 	 *
-	 * Checks whether output selector, partitioning works correctly when applied on a union.
+	 * <p>Checks whether output selector, partitioning works correctly when applied on a union.
 	 */
 	@Test
 	public void testVirtualTransformations2() throws Exception {
@@ -247,7 +246,6 @@ public class StreamGraphGeneratorTest {
 	public void testSetupOfKeyGroupPartitioner() {
 		int maxParallelism = 42;
 		StreamExecutionEnvironment env = StreamExecutionEnvironment.getExecutionEnvironment();
-		env.getConfig().setParallelism(12);
 		env.getConfig().setMaxParallelism(maxParallelism);
 
 		DataStream<Integer> source = env.fromElements(1, 2, 3);
@@ -271,7 +269,7 @@ public class StreamGraphGeneratorTest {
 	}
 
 	/**
-	 * Tests that the global and operator-wide max parallelism setting is respected
+	 * Tests that the global and operator-wide max parallelism setting is respected.
 	 */
 	@Test
 	public void testMaxParallelismForwarding() {
@@ -279,7 +277,6 @@ public class StreamGraphGeneratorTest {
 		int keyedResult2MaxParallelism = 17;
 
 		StreamExecutionEnvironment env = StreamExecutionEnvironment.getExecutionEnvironment();
-		env.getConfig().setParallelism(12);
 		env.getConfig().setMaxParallelism(globalMaxParallelism);
 
 		DataStream<Integer> source = env.fromElements(1, 2, 3);
@@ -386,17 +383,16 @@ public class StreamGraphGeneratorTest {
 		DataStream<Integer> input1 = env.fromElements(1, 2, 3, 4).setMaxParallelism(128);
 		DataStream<Integer> input2 = env.fromElements(1, 2, 3, 4).setMaxParallelism(129);
 
-		env.setParallelism(12);
 		env.getConfig().setMaxParallelism(maxParallelism);
 
 		DataStream<Integer> keyedResult = input1.connect(input2).keyBy(
-			 new KeySelector<Integer, Integer>() {
-				 private static final long serialVersionUID = -6908614081449363419L;
+			new KeySelector<Integer, Integer>() {
+				private static final long serialVersionUID = -6908614081449363419L;
 
-				 @Override
-				 public Integer getKey(Integer value) throws Exception {
-					 return value;
-				 }
+				@Override
+				public Integer getKey(Integer value) throws Exception {
+					return value;
+				}
 			},
 			new KeySelector<Integer, Integer>() {
 				private static final long serialVersionUID = 3195683453223164931L;
@@ -504,6 +500,5 @@ public class StreamGraphGeneratorTest {
 			return value;
 		}
 
-	};
-
+	}
 }

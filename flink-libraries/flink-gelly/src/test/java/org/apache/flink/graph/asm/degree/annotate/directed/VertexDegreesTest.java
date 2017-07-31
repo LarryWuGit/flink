@@ -28,10 +28,14 @@ import org.apache.flink.test.util.TestBaseUtils;
 import org.apache.flink.types.IntValue;
 import org.apache.flink.types.LongValue;
 import org.apache.flink.types.NullValue;
+
 import org.junit.Test;
 
 import static org.junit.Assert.assertEquals;
 
+/**
+ * Tests for {@link VertexDegrees}.
+ */
 public class VertexDegreesTest
 extends AsmTestBase {
 
@@ -95,7 +99,7 @@ extends AsmTestBase {
 	@Test
 	public void testWithRMatGraph()
 	throws Exception {
-		DataSet<Vertex<LongValue, Degrees>> degrees = directedRMatGraph
+		DataSet<Vertex<LongValue, Degrees>> degrees = directedRMatGraph(10, 16)
 			.run(new VertexDegrees<LongValue, NullValue, NullValue>());
 
 		Checksum checksum = new ChecksumHashCode<Vertex<LongValue, Degrees>>()

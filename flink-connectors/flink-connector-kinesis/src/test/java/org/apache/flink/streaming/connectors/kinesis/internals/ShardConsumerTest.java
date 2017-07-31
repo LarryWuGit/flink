@@ -17,17 +17,18 @@
 
 package org.apache.flink.streaming.connectors.kinesis.internals;
 
-import com.amazonaws.services.kinesis.model.HashKeyRange;
-import com.amazonaws.services.kinesis.model.Shard;
-import org.apache.commons.lang.StringUtils;
-import org.apache.flink.streaming.connectors.kinesis.model.KinesisStreamShard;
 import org.apache.flink.streaming.connectors.kinesis.model.KinesisStreamShardState;
 import org.apache.flink.streaming.connectors.kinesis.model.SentinelSequenceNumber;
 import org.apache.flink.streaming.connectors.kinesis.model.SequenceNumber;
+import org.apache.flink.streaming.connectors.kinesis.model.StreamShardHandle;
 import org.apache.flink.streaming.connectors.kinesis.proxy.KinesisProxyInterface;
 import org.apache.flink.streaming.connectors.kinesis.testutils.FakeKinesisBehavioursFactory;
 import org.apache.flink.streaming.connectors.kinesis.testutils.KinesisShardIdGenerator;
 import org.apache.flink.streaming.connectors.kinesis.testutils.TestableKinesisDataFetcher;
+
+import com.amazonaws.services.kinesis.model.HashKeyRange;
+import com.amazonaws.services.kinesis.model.Shard;
+import org.apache.commons.lang3.StringUtils;
 import org.junit.Test;
 import org.mockito.Mockito;
 
@@ -39,11 +40,14 @@ import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.Assert.assertTrue;
 
+/**
+ * Tests for the {@link ShardConsumer}.
+ */
 public class ShardConsumerTest {
 
 	@Test
 	public void testCorrectNumOfCollectedRecordsAndUpdatedState() {
-		KinesisStreamShard fakeToBeConsumedShard = new KinesisStreamShard(
+		StreamShardHandle fakeToBeConsumedShard = new StreamShardHandle(
 			"fakeStream",
 			new Shard()
 				.withShardId(KinesisShardIdGenerator.generateFromShardOrder(0))
@@ -54,7 +58,8 @@ public class ShardConsumerTest {
 
 		LinkedList<KinesisStreamShardState> subscribedShardsStateUnderTest = new LinkedList<>();
 		subscribedShardsStateUnderTest.add(
-			new KinesisStreamShardState(fakeToBeConsumedShard, new SequenceNumber("fakeStartingState")));
+			new KinesisStreamShardState(KinesisDataFetcher.convertToStreamShardMetadata(fakeToBeConsumedShard),
+				fakeToBeConsumedShard, new SequenceNumber("fakeStartingState")));
 
 		TestableKinesisDataFetcher fetcher =
 			new TestableKinesisDataFetcher(
@@ -70,7 +75,7 @@ public class ShardConsumerTest {
 		new ShardConsumer<>(
 			fetcher,
 			0,
-			subscribedShardsStateUnderTest.get(0).getKinesisStreamShard(),
+			subscribedShardsStateUnderTest.get(0).getStreamShardHandle(),
 			subscribedShardsStateUnderTest.get(0).getLastProcessedSequenceNum(),
 			FakeKinesisBehavioursFactory.totalNumOfRecordsAfterNumOfGetRecordsCalls(1000, 9)).run();
 
@@ -81,7 +86,7 @@ public class ShardConsumerTest {
 
 	@Test
 	public void testCorrectNumOfCollectedRecordsAndUpdatedStateWithUnexpectedExpiredIterator() {
-		KinesisStreamShard fakeToBeConsumedShard = new KinesisStreamShard(
+		StreamShardHandle fakeToBeConsumedShard = new StreamShardHandle(
 			"fakeStream",
 			new Shard()
 				.withShardId(KinesisShardIdGenerator.generateFromShardOrder(0))
@@ -92,7 +97,8 @@ public class ShardConsumerTest {
 
 		LinkedList<KinesisStreamShardState> subscribedShardsStateUnderTest = new LinkedList<>();
 		subscribedShardsStateUnderTest.add(
-			new KinesisStreamShardState(fakeToBeConsumedShard, new SequenceNumber("fakeStartingState")));
+			new KinesisStreamShardState(KinesisDataFetcher.convertToStreamShardMetadata(fakeToBeConsumedShard),
+				fakeToBeConsumedShard, new SequenceNumber("fakeStartingState")));
 
 		TestableKinesisDataFetcher fetcher =
 			new TestableKinesisDataFetcher(
@@ -108,7 +114,7 @@ public class ShardConsumerTest {
 		new ShardConsumer<>(
 			fetcher,
 			0,
-			subscribedShardsStateUnderTest.get(0).getKinesisStreamShard(),
+			subscribedShardsStateUnderTest.get(0).getStreamShardHandle(),
 			subscribedShardsStateUnderTest.get(0).getLastProcessedSequenceNum(),
 			// Get a total of 1000 records with 9 getRecords() calls,
 			// and the 7th getRecords() call will encounter an unexpected expired shard iterator

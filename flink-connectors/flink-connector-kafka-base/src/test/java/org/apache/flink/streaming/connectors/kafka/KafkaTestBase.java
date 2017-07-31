@@ -20,29 +20,28 @@ package org.apache.flink.streaming.connectors.kafka;
 import org.apache.flink.client.program.ProgramInvocationException;
 import org.apache.flink.configuration.ConfigConstants;
 import org.apache.flink.configuration.Configuration;
+import org.apache.flink.configuration.MetricOptions;
 import org.apache.flink.configuration.TaskManagerOptions;
 import org.apache.flink.metrics.jmx.JMXReporter;
 import org.apache.flink.runtime.client.JobExecutionException;
 import org.apache.flink.runtime.minicluster.LocalFlinkMiniCluster;
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
+import org.apache.flink.streaming.util.TestStreamEnvironment;
 import org.apache.flink.test.util.SuccessException;
 import org.apache.flink.util.InstantiationUtil;
 import org.apache.flink.util.TestLogger;
 
 import org.junit.AfterClass;
 import org.junit.BeforeClass;
-
 import org.junit.ClassRule;
 import org.junit.rules.TemporaryFolder;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import scala.concurrent.duration.FiniteDuration;
-
-import java.io.IOException;
 import java.util.Properties;
 import java.util.concurrent.TimeUnit;
 
+import scala.concurrent.duration.FiniteDuration;
 
 /**
  * The base for the Kafka tests. It brings up:
@@ -51,7 +50,7 @@ import java.util.concurrent.TimeUnit;
  *     <li>Three Kafka Brokers (mini clusters)</li>
  *     <li>A Flink mini cluster</li>
  * </ul>
- * 
+ *
  * <p>Code in this test is based on the following GitHub repository:
  * <a href="https://github.com/sakserv/hadoop-mini-clusters">
  *   https://github.com/sakserv/hadoop-mini-clusters</a> (ASL licensed),
@@ -61,16 +60,20 @@ import java.util.concurrent.TimeUnit;
 public abstract class KafkaTestBase extends TestLogger {
 
 	protected static final Logger LOG = LoggerFactory.getLogger(KafkaTestBase.class);
-	
+
 	protected static final int NUMBER_OF_KAFKA_SERVERS = 3;
+
+	protected static final int NUM_TMS = 1;
+
+	protected static final int TM_SLOTS = 8;
+
+	protected static final int PARALLELISM = NUM_TMS * TM_SLOTS;
 
 	protected static String brokerConnectionStrings;
 
 	protected static Properties standardProps;
-	
-	protected static LocalFlinkMiniCluster flink;
 
-	protected static int flinkPort;
+	protected static LocalFlinkMiniCluster flink;
 
 	protected static FiniteDuration timeout = new FiniteDuration(10, TimeUnit.SECONDS);
 
@@ -84,9 +87,9 @@ public abstract class KafkaTestBase extends TestLogger {
 	// ------------------------------------------------------------------------
 	//  Setup and teardown of the mini clusters
 	// ------------------------------------------------------------------------
-	
+
 	@BeforeClass
-	public static void prepare() throws IOException, ClassNotFoundException {
+	public static void prepare() throws ClassNotFoundException {
 
 		LOG.info("-------------------------------------------------------------------------");
 		LOG.info("    Starting KafkaTestBase ");
@@ -94,6 +97,7 @@ public abstract class KafkaTestBase extends TestLogger {
 
 		startClusters(false);
 
+		TestStreamEnvironment.setAsContext(flink, PARALLELISM);
 	}
 
 	@AfterClass
@@ -102,6 +106,8 @@ public abstract class KafkaTestBase extends TestLogger {
 		LOG.info("-------------------------------------------------------------------------");
 		LOG.info("    Shut down KafkaTestBase ");
 		LOG.info("-------------------------------------------------------------------------");
+
+		TestStreamEnvironment.unsetAsContext();
 
 		shutdownClusters();
 
@@ -112,11 +118,11 @@ public abstract class KafkaTestBase extends TestLogger {
 
 	protected static Configuration getFlinkConfiguration() {
 		Configuration flinkConfig = new Configuration();
-		flinkConfig.setInteger(ConfigConstants.LOCAL_NUMBER_TASK_MANAGER, 1);
-		flinkConfig.setInteger(ConfigConstants.TASK_MANAGER_NUM_TASK_SLOTS, 8);
+		flinkConfig.setInteger(ConfigConstants.LOCAL_NUMBER_TASK_MANAGER, NUM_TMS);
+		flinkConfig.setInteger(ConfigConstants.TASK_MANAGER_NUM_TASK_SLOTS, TM_SLOTS);
 		flinkConfig.setLong(TaskManagerOptions.MANAGED_MEMORY_SIZE, 16L);
 		flinkConfig.setString(ConfigConstants.RESTART_STRATEGY_FIXED_DELAY_DELAY, "0 s");
-		flinkConfig.setString(ConfigConstants.METRICS_REPORTERS_LIST, "my_reporter");
+		flinkConfig.setString(MetricOptions.REPORTERS_LIST, "my_reporter");
 		flinkConfig.setString(ConfigConstants.METRICS_REPORTER_PREFIX + "my_reporter." + ConfigConstants.METRICS_REPORTER_CLASS_SUFFIX, JMXReporter.class.getName());
 		return flinkConfig;
 	}
@@ -146,19 +152,15 @@ public abstract class KafkaTestBase extends TestLogger {
 		// start also a re-usable Flink mini cluster
 		flink = new LocalFlinkMiniCluster(getFlinkConfiguration(), false);
 		flink.start();
-
-		flinkPort = flink.getLeaderRPCPort();
-
 	}
 
 	protected static void shutdownClusters() {
 
-		flinkPort = -1;
 		if (flink != null) {
 			flink.shutdown();
 		}
 
-		if(secureProps != null) {
+		if (secureProps != null) {
 			secureProps.clear();
 		}
 
@@ -166,12 +168,9 @@ public abstract class KafkaTestBase extends TestLogger {
 
 	}
 
-
-
 	// ------------------------------------------------------------------------
 	//  Execution utilities
 	// ------------------------------------------------------------------------
-	
 
 	protected static void tryExecutePropagateExceptions(StreamExecutionEnvironment see, String name) throws Exception {
 		try {
@@ -196,7 +195,7 @@ public abstract class KafkaTestBase extends TestLogger {
 	protected static void createTestTopic(String topic, int numberOfPartitions, int replicationFactor) {
 		kafkaServer.createTestTopic(topic, numberOfPartitions, replicationFactor);
 	}
-	
+
 	protected static void deleteTestTopic(String topic) {
 		kafkaServer.deleteTestTopic(topic);
 	}

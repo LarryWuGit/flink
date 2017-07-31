@@ -17,22 +17,25 @@
 
 package org.apache.flink.streaming.connectors.kafka;
 
-import kafka.server.KafkaServer;
 import org.apache.flink.streaming.api.datastream.DataStream;
 import org.apache.flink.streaming.api.datastream.DataStreamSink;
 import org.apache.flink.streaming.api.operators.StreamSink;
-import org.apache.flink.streaming.connectors.kafka.partitioner.KafkaPartitioner;
+import org.apache.flink.streaming.connectors.kafka.partitioner.FlinkKafkaPartitioner;
 import org.apache.flink.streaming.util.serialization.DeserializationSchema;
 import org.apache.flink.streaming.util.serialization.KeyedDeserializationSchema;
 import org.apache.flink.streaming.util.serialization.KeyedDeserializationSchemaWrapper;
 import org.apache.flink.streaming.util.serialization.KeyedSerializationSchema;
 
+import kafka.server.KafkaServer;
+import org.apache.kafka.clients.consumer.ConsumerRecord;
+
+import java.util.Collection;
 import java.util.Collections;
 import java.util.List;
 import java.util.Properties;
 
 /**
- * Abstract class providing a Kafka test environment
+ * Abstract class providing a Kafka test environment.
  */
 public abstract class KafkaTestEnvironment {
 
@@ -79,19 +82,36 @@ public abstract class KafkaTestEnvironment {
 
 	public abstract <T> FlinkKafkaConsumerBase<T> getConsumer(List<String> topics, KeyedDeserializationSchema<T> readSchema, Properties props);
 
+	public abstract <K, V> Collection<ConsumerRecord<K, V>> getAllRecordsFromTopic(
+			Properties properties,
+			String topic,
+			int partition,
+			long timeout);
+
 	public abstract <T> StreamSink<T> getProducerSink(String topic,
 			KeyedSerializationSchema<T> serSchema, Properties props,
-			KafkaPartitioner<T> partitioner);
+			FlinkKafkaPartitioner<T> partitioner);
 
 	public abstract <T> DataStreamSink<T> produceIntoKafka(DataStream<T> stream, String topic,
 														KeyedSerializationSchema<T> serSchema, Properties props,
-														KafkaPartitioner<T> partitioner);
+														FlinkKafkaPartitioner<T> partitioner);
+
+	public abstract <T> DataStreamSink<T> writeToKafkaWithTimestamps(
+			DataStream<T> stream,
+			String topic,
+			KeyedSerializationSchema<T> serSchema,
+			Properties props);
 
 	// -- offset handlers
 
+	/**
+	 * Simple interface to commit and retrieve offsets.
+	 */
 	public interface KafkaOffsetHandler {
 		Long getCommittedOffset(String topicName, int partition);
+
 		void setCommittedOffset(String topicName, int partition, long offset);
+
 		void close();
 	}
 

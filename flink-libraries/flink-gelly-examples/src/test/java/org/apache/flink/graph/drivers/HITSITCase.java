@@ -19,16 +19,27 @@
 package org.apache.flink.graph.drivers;
 
 import org.apache.flink.client.program.ProgramParametrizationException;
+
+import org.junit.Assume;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.junit.runners.Parameterized;
 
+/**
+ * Tests for {@link HITS}.
+ */
 @RunWith(Parameterized.class)
-public class HITSITCase
-extends DriverBaseITCase {
+public class HITSITCase extends DriverBaseITCase {
 
-	public HITSITCase(TestExecutionMode mode) {
-		super(mode);
+	public HITSITCase(String idType, TestExecutionMode mode) {
+		super(idType, mode);
+	}
+
+	private String[] parameters(int scale, String output) {
+		return new String[] {
+			"--algorithm", "HITS",
+			"--input", "RMatGraph", "--scale", Integer.toString(scale), "--type", idType, "--simplify", "directed",
+			"--output", output};
 	}
 
 	@Test
@@ -42,11 +53,10 @@ extends DriverBaseITCase {
 	}
 
 	@Test
-	public void testPrintWithRMatIntegerGraph() throws Exception {
-		expectedCount(
-			new String[]{"--algorithm", "HITS",
-				"--input", "RMatGraph", "--type", "integer", "--simplify", "directed",
-				"--output", "print"},
-			902);
+	public void testPrintWithRMatGraph() throws Exception {
+		// skip 'char' since it is not printed as a number
+		Assume.assumeFalse(idType.equals("char") || idType.equals("nativeChar"));
+
+		expectedCount(parameters(8, "print"), 233);
 	}
 }

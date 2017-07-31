@@ -54,7 +54,7 @@ public class RocksDBReducingStateTest {
 	@Test
 	public void testAddAndGet() throws Exception {
 
-		final ReducingStateDescriptor<Long> stateDescr = 
+		final ReducingStateDescriptor<Long> stateDescr =
 				new ReducingStateDescriptor<>("my-state", new AddingFunction(), Long.class);
 		stateDescr.initializeSerializerUnlessSet(new ExecutionConfig());
 
@@ -62,9 +62,9 @@ public class RocksDBReducingStateTest {
 		backend.setDbStoragePath(tmp.newFolder().getAbsolutePath());
 
 		final RocksDBKeyedStateBackend<String> keyedBackend = createKeyedBackend(backend);
-		
+
 		try {
-			InternalReducingState<VoidNamespace, Long> state = 
+			InternalReducingState<VoidNamespace, Long> state =
 					keyedBackend.createReducingState(VoidNamespaceSerializer.INSTANCE, stateDescr);
 			state.setCurrentNamespace(VoidNamespace.INSTANCE);
 
@@ -126,7 +126,7 @@ public class RocksDBReducingStateTest {
 		final RocksDBKeyedStateBackend<String> keyedBackend = createKeyedBackend(backend);
 
 		try {
-			final InternalReducingState<TimeWindow, Long> state = 
+			final InternalReducingState<TimeWindow, Long> state =
 					keyedBackend.createReducingState(new TimeWindow.Serializer(), stateDescr);
 
 			// populate the different namespaces
@@ -210,7 +210,7 @@ public class RocksDBReducingStateTest {
 	// ------------------------------------------------------------------------
 
 	private static RocksDBKeyedStateBackend<String> createKeyedBackend(RocksDBStateBackend backend) throws Exception {
-		return (RocksDBKeyedStateBackend<String>) backend.createKeyedStateBackend(
+		RocksDBKeyedStateBackend<String> keyedBackend = (RocksDBKeyedStateBackend<String>) backend.createKeyedStateBackend(
 				new DummyEnvironment("TestTask", 1, 0),
 				new JobID(),
 				"test-op",
@@ -218,6 +218,10 @@ public class RocksDBReducingStateTest {
 				16,
 				new KeyGroupRange(2, 3),
 				mock(TaskKvStateRegistry.class));
+
+		keyedBackend.restore(null);
+
+		return keyedBackend;
 	}
 
 	// ------------------------------------------------------------------------

@@ -19,49 +19,31 @@
 package org.apache.flink.streaming.connectors.kafka;
 
 import org.apache.flink.api.common.typeinfo.TypeInformation;
-import org.apache.flink.types.Row;
-import org.apache.flink.table.sources.StreamTableSource;
 import org.apache.flink.streaming.util.serialization.DeserializationSchema;
+import org.apache.flink.table.sources.StreamTableSource;
+import org.apache.flink.types.Row;
 
 import java.util.Properties;
 
 /**
  * Kafka {@link StreamTableSource} for Kafka 0.10.
  */
-public class Kafka010JsonTableSource extends Kafka09JsonTableSource {
+public class Kafka010JsonTableSource extends KafkaJsonTableSource {
 
 	/**
 	 * Creates a Kafka 0.10 JSON {@link StreamTableSource}.
 	 *
 	 * @param topic      Kafka topic to consume.
 	 * @param properties Properties for the Kafka consumer.
-	 * @param fieldNames Row field names.
-	 * @param fieldTypes Row field types.
+	 * @param typeInfo   Type information describing the result type. The field names are used
+	 *                   to parse the JSON file and so are the types.
 	 */
 	public Kafka010JsonTableSource(
 			String topic,
 			Properties properties,
-			String[] fieldNames,
-			TypeInformation<?>[] fieldTypes) {
+			TypeInformation<Row> typeInfo) {
 
-		super(topic, properties, fieldNames, fieldTypes);
-	}
-
-	/**
-	 * Creates a Kafka 0.10 JSON {@link StreamTableSource}.
-	 *
-	 * @param topic      Kafka topic to consume.
-	 * @param properties Properties for the Kafka consumer.
-	 * @param fieldNames Row field names.
-	 * @param fieldTypes Row field types.
-	 */
-	public Kafka010JsonTableSource(
-			String topic,
-			Properties properties,
-			String[] fieldNames,
-			Class<?>[] fieldTypes) {
-
-		super(topic, properties, fieldNames, fieldTypes);
+		super(topic, properties, typeInfo);
 	}
 
 	@Override

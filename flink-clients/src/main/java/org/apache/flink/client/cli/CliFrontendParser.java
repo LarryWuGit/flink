@@ -15,7 +15,11 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 package org.apache.flink.client.cli;
+
+import org.apache.flink.client.CliFrontend;
+import org.apache.flink.configuration.CoreOptions;
 
 import org.apache.commons.cli.CommandLine;
 import org.apache.commons.cli.DefaultParser;
@@ -23,11 +27,8 @@ import org.apache.commons.cli.HelpFormatter;
 import org.apache.commons.cli.Option;
 import org.apache.commons.cli.Options;
 import org.apache.commons.cli.ParseException;
-import org.apache.flink.client.CliFrontend;
-import org.apache.flink.configuration.ConfigConstants;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-
 
 /**
  * A simple command line parser (based on Apache Commons CLI) that extracts command
@@ -93,7 +94,7 @@ public class CliFrontendParser {
 	static final Option CANCEL_WITH_SAVEPOINT_OPTION = new Option(
 			"s", "withSavepoint", true, "Trigger savepoint and cancel job. The target " +
 			"directory is optional. If no directory is specified, the configured default " +
-			"directory (" + ConfigConstants.SAVEPOINT_DIRECTORY_KEY + ") is used.");
+			"directory (" + CoreOptions.SAVEPOINT_DIRECTORY.key() + ") is used.");
 
 	static {
 		HELP_OPTION.setRequired(false);
@@ -184,7 +185,6 @@ public class CliFrontendParser {
 		options = getJobManagerAddressOption(options);
 		return addCustomCliOptions(options, true);
 	}
-
 
 	private static Options getJobManagerAddressOption(Options options) {
 		options.addOption(ADDRESS_OPTION);
@@ -374,7 +374,7 @@ public class CliFrontendParser {
 	}
 
 	/**
-	 * Adds custom cli options
+	 * Adds custom cli options.
 	 * @param options The options to add options to
 	 * @param runOptions Whether to include run options
 	 * @return Options with additions
@@ -390,7 +390,7 @@ public class CliFrontendParser {
 	}
 
 	/**
-	 * Prints custom cli options
+	 * Prints custom cli options.
 	 * @param formatter The formatter to use for printing
 	 * @param runOptions True if the run options should be printed, False to print only general options
 	 */

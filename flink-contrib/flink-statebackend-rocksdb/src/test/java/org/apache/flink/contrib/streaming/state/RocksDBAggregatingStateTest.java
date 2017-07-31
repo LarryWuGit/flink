@@ -36,8 +36,9 @@ import org.junit.Test;
 import org.junit.rules.TemporaryFolder;
 
 import static java.util.Arrays.asList;
-import static org.mockito.Mockito.*;
-import static org.junit.Assert.*;
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertNull;
+import static org.mockito.Mockito.mock;
 
 /**
  * Tests for the {@link InternalAggregatingState} implementation on top of RocksDB.
@@ -204,7 +205,7 @@ public class RocksDBAggregatingStateTest {
 	}
 
 	private static RocksDBKeyedStateBackend<String> createKeyedBackend(RocksDBStateBackend backend) throws Exception {
-		return (RocksDBKeyedStateBackend<String>) backend.createKeyedStateBackend(
+		RocksDBKeyedStateBackend<String> keyedBackend = (RocksDBKeyedStateBackend<String>) backend.createKeyedStateBackend(
 						new DummyEnvironment("TestTask", 1, 0),
 						new JobID(),
 						"test-op",
@@ -212,6 +213,10 @@ public class RocksDBAggregatingStateTest {
 						16,
 						new KeyGroupRange(2, 3),
 						mock(TaskKvStateRegistry.class));
+
+		keyedBackend.restore(null);
+
+		return keyedBackend;
 	}
 
 	//  test functions

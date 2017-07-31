@@ -18,9 +18,6 @@
 
 package org.apache.flink.test.recovery;
 
-import akka.actor.ActorRef;
-import akka.actor.ActorSystem;
-import org.apache.commons.io.FileUtils;
 import org.apache.flink.api.common.ExecutionMode;
 import org.apache.flink.api.common.functions.ReduceFunction;
 import org.apache.flink.api.common.functions.RichFlatMapFunction;
@@ -34,27 +31,30 @@ import org.apache.flink.configuration.HighAvailabilityOptions;
 import org.apache.flink.configuration.TaskManagerOptions;
 import org.apache.flink.runtime.akka.AkkaUtils;
 import org.apache.flink.runtime.clusterframework.types.ResourceID;
+import org.apache.flink.runtime.highavailability.HighAvailabilityServices;
+import org.apache.flink.runtime.highavailability.HighAvailabilityServicesUtils;
 import org.apache.flink.runtime.instance.ActorGateway;
 import org.apache.flink.runtime.instance.AkkaActorGateway;
 import org.apache.flink.runtime.leaderelection.TestingListener;
 import org.apache.flink.runtime.leaderretrieval.LeaderRetrievalService;
 import org.apache.flink.runtime.taskmanager.TaskManager;
+import org.apache.flink.runtime.testingUtils.TestingUtils;
 import org.apache.flink.runtime.testutils.CommonTestUtils;
 import org.apache.flink.runtime.testutils.JobManagerActorTestUtils;
 import org.apache.flink.runtime.testutils.JobManagerProcess;
 import org.apache.flink.runtime.testutils.ZooKeeperTestUtils;
-import org.apache.flink.runtime.util.ZooKeeperUtils;
 import org.apache.flink.runtime.zookeeper.ZooKeeperTestEnvironment;
 import org.apache.flink.util.Collector;
 import org.apache.flink.util.TestLogger;
+
+import akka.actor.ActorRef;
+import akka.actor.ActorSystem;
+import org.apache.commons.io.FileUtils;
 import org.junit.AfterClass;
 import org.junit.Before;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.junit.runners.Parameterized;
-import scala.Option;
-import scala.concurrent.duration.Deadline;
-import scala.concurrent.duration.FiniteDuration;
 
 import java.io.File;
 import java.io.IOException;
@@ -62,6 +62,10 @@ import java.util.Arrays;
 import java.util.Collection;
 import java.util.UUID;
 import java.util.concurrent.TimeUnit;
+
+import scala.Option;
+import scala.concurrent.duration.Deadline;
+import scala.concurrent.duration.FiniteDuration;
 
 import static org.apache.flink.runtime.testutils.CommonTestUtils.createTempDirectory;
 import static org.junit.Assert.assertEquals;
@@ -86,9 +90,9 @@ import static org.junit.Assert.fail;
 @RunWith(Parameterized.class)
 public class JobManagerHAProcessFailureBatchRecoveryITCase extends TestLogger {
 
-	private final static ZooKeeperTestEnvironment ZooKeeper = new ZooKeeperTestEnvironment(1);
+	private static final ZooKeeperTestEnvironment ZooKeeper = new ZooKeeperTestEnvironment(1);
 
-	private final static FiniteDuration TestTimeOut = new FiniteDuration(5, TimeUnit.MINUTES);
+	private static final FiniteDuration TestTimeOut = new FiniteDuration(5, TimeUnit.MINUTES);
 
 	private static final File FileStateBackendBasePath;
 
@@ -153,6 +157,7 @@ public class JobManagerHAProcessFailureBatchRecoveryITCase extends TestLogger {
 		Configuration config = new Configuration();
 		config.setString(HighAvailabilityOptions.HA_MODE, "ZOOKEEPER");
 		config.setString(HighAvailabilityOptions.HA_ZOOKEEPER_QUORUM, zkQuorum);
+		config.setString(HighAvailabilityOptions.HA_STORAGE_PATH, FileStateBackendBasePath.getAbsolutePath());
 
 		ExecutionEnvironment env = ExecutionEnvironment.createRemoteEnvironment(
 				"leader", 1, config);
@@ -161,8 +166,8 @@ public class JobManagerHAProcessFailureBatchRecoveryITCase extends TestLogger {
 		env.getConfig().setExecutionMode(executionMode);
 		env.getConfig().disableSysoutLogging();
 
-		final long NUM_ELEMENTS = 100000L;
-		final DataSet<Long> result = env.generateSequence(1, NUM_ELEMENTS)
+		final long numElements = 100000L;
+		final DataSet<Long> result = env.generateSequence(1, numElements)
 				// make sure every mapper is involved (no one is skipped because of lazy split assignment)
 				.rebalance()
 				// the majority of the behavior is in the MapFunction
@@ -206,7 +211,7 @@ public class JobManagerHAProcessFailureBatchRecoveryITCase extends TestLogger {
 				.flatMap(new RichFlatMapFunction<Long, Long>() {
 					@Override
 					public void flatMap(Long value, Collector<Long> out) throws Exception {
-						assertEquals(NUM_ELEMENTS * (NUM_ELEMENTS + 1L) / 2L, (long) value);
+						assertEquals(numElements * (numElements + 1L) / 2L, (long) value);
 
 						int taskIndex = getRuntimeContext().getIndexOfThisSubtask();
 						AbstractTaskManagerProcessFailureRecoveryTest.touchFile(
@@ -238,7 +243,8 @@ public class JobManagerHAProcessFailureBatchRecoveryITCase extends TestLogger {
 		// Task managers
 		final ActorSystem[] tmActorSystem = new ActorSystem[numberOfTaskManagers];
 
-		// Leader election service
+		HighAvailabilityServices highAvailabilityServices = null;
+
 		LeaderRetrievalService leaderRetrievalService = null;
 
 		// Coordination between the processes goes through a directory
@@ -263,13 +269,22 @@ public class JobManagerHAProcessFailureBatchRecoveryITCase extends TestLogger {
 			config.setInteger(TaskManagerOptions.NETWORK_NUM_BUFFERS, 100);
 			config.setInteger(ConfigConstants.TASK_MANAGER_NUM_TASK_SLOTS, 2);
 
+			highAvailabilityServices = HighAvailabilityServicesUtils.createAvailableOrEmbeddedServices(
+				config,
+				TestingUtils.defaultExecutor());
+
 			// Start the task manager process
 			for (int i = 0; i < numberOfTaskManagers; i++) {
 				tmActorSystem[i] = AkkaUtils.createActorSystem(AkkaUtils.getDefaultAkkaConfig());
 				TaskManager.startTaskManagerComponentsAndActor(
-						config, ResourceID.generate(), tmActorSystem[i], "localhost",
-						Option.<String>empty(), Option.<LeaderRetrievalService>empty(),
-						false, TaskManager.class);
+					config,
+					ResourceID.generate(),
+					tmActorSystem[i],
+					highAvailabilityServices,
+					"localhost",
+					Option.<String>empty(),
+					false,
+					TaskManager.class);
 			}
 
 			// Test actor system
@@ -279,7 +294,7 @@ public class JobManagerHAProcessFailureBatchRecoveryITCase extends TestLogger {
 
 			// Leader listener
 			TestingListener leaderListener = new TestingListener();
-			leaderRetrievalService = ZooKeeperUtils.createLeaderRetrievalService(config);
+			leaderRetrievalService = highAvailabilityServices.getJobManagerLeaderRetriever(HighAvailabilityServices.DEFAULT_JOB_ID);
 			leaderRetrievalService.start(leaderListener);
 
 			// Initial submission
@@ -376,6 +391,10 @@ public class JobManagerHAProcessFailureBatchRecoveryITCase extends TestLogger {
 				if (jmProces != null) {
 					jmProces.destroy();
 				}
+			}
+
+			if (highAvailabilityServices != null) {
+				highAvailabilityServices.closeAndCleanupAllData();
 			}
 
 			// Delete coordination directory

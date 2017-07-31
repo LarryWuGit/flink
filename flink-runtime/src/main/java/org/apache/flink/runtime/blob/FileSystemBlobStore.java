@@ -41,7 +41,7 @@ import static org.apache.flink.util.Preconditions.checkNotNull;
  *
  * <p>This is used in addition to the local blob storage for high availability.
  */
-public class FileSystemBlobStore implements BlobStore {
+public class FileSystemBlobStore implements BlobStoreService {
 
 	private static final Logger LOG = LoggerFactory.getLogger(FileSystemBlobStore.class);
 
@@ -68,13 +68,8 @@ public class FileSystemBlobStore implements BlobStore {
 		put(localFile, BlobUtils.getRecoveryPath(basePath, blobKey));
 	}
 
-	@Override
-	public void put(File localFile, JobID jobId, String key) throws IOException {
-		put(localFile, BlobUtils.getRecoveryPath(basePath, jobId, key));
-	}
-
 	private void put(File fromFile, String toBlobPath) throws IOException {
-		try (OutputStream os = fileSystem.create(new Path(toBlobPath), true)) {
+		try (OutputStream os = fileSystem.create(new Path(toBlobPath), FileSystem.WriteMode.OVERWRITE)) {
 			LOG.debug("Copying from {} to {}.", fromFile, toBlobPath);
 			Files.copy(fromFile, os);
 		}
@@ -85,11 +80,6 @@ public class FileSystemBlobStore implements BlobStore {
 	@Override
 	public void get(BlobKey blobKey, File localFile) throws IOException {
 		get(BlobUtils.getRecoveryPath(basePath, blobKey), localFile);
-	}
-
-	@Override
-	public void get(JobID jobId, String key, File localFile) throws IOException {
-		get(BlobUtils.getRecoveryPath(basePath, jobId, key), localFile);
 	}
 
 	private void get(String fromBlobPath, File toFile) throws IOException {
@@ -127,11 +117,6 @@ public class FileSystemBlobStore implements BlobStore {
 	}
 
 	@Override
-	public void delete(JobID jobId, String key) {
-		delete(BlobUtils.getRecoveryPath(basePath, jobId, key));
-	}
-
-	@Override
 	public void deleteAll(JobID jobId) {
 		delete(BlobUtils.getRecoveryPath(basePath, jobId));
 	}
@@ -157,14 +142,19 @@ public class FileSystemBlobStore implements BlobStore {
 	}
 
 	@Override
-	public void cleanUp() {
+	public void closeAndCleanupAllData() {
 		try {
 			LOG.debug("Cleaning up {}.", basePath);
 
 			fileSystem.delete(new Path(basePath), true);
 		}
 		catch (Exception e) {
-			LOG.error("Failed to clean up recovery directory.");
+			LOG.error("Failed to clean up recovery directory.", e);
 		}
+	}
+
+	@Override
+	public void close() throws IOException {
+		// nothing to do for the FileSystemBlobStore
 	}
 }

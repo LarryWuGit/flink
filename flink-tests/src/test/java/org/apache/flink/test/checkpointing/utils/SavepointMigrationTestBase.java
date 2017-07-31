@@ -18,41 +18,50 @@
 
 package org.apache.flink.test.checkpointing.utils;
 
-import java.io.File;
-import java.net.URI;
-import java.net.URL;
-import java.util.Map;
-import java.util.concurrent.TimeUnit;
-
-import org.apache.commons.io.FileUtils;
+import org.apache.flink.api.common.JobID;
 import org.apache.flink.api.common.JobSubmissionResult;
 import org.apache.flink.api.java.tuple.Tuple2;
 import org.apache.flink.client.program.StandaloneClusterClient;
 import org.apache.flink.configuration.ConfigConstants;
 import org.apache.flink.configuration.Configuration;
 import org.apache.flink.configuration.CoreOptions;
+import org.apache.flink.runtime.client.JobListeningContext;
 import org.apache.flink.runtime.instance.ActorGateway;
 import org.apache.flink.runtime.jobgraph.JobGraph;
+import org.apache.flink.runtime.jobgraph.JobStatus;
 import org.apache.flink.runtime.jobgraph.SavepointRestoreSettings;
 import org.apache.flink.runtime.messages.JobManagerMessages;
 import org.apache.flink.runtime.minicluster.LocalFlinkMiniCluster;
 import org.apache.flink.runtime.state.filesystem.FsStateBackendFactory;
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
 import org.apache.flink.test.util.TestBaseUtils;
+
+import org.apache.commons.io.FileUtils;
 import org.junit.After;
 import org.junit.Before;
 import org.junit.Rule;
 import org.junit.rules.TemporaryFolder;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+
+import java.io.File;
+import java.net.URI;
+import java.net.URL;
+import java.util.Map;
+import java.util.concurrent.TimeUnit;
+
 import scala.Option;
 import scala.concurrent.Await;
 import scala.concurrent.Future;
 import scala.concurrent.duration.Deadline;
+import scala.concurrent.duration.Duration;
 import scala.concurrent.duration.FiniteDuration;
 
 import static junit.framework.Assert.fail;
 
+/**
+ * Test savepoint migration.
+ */
 public class SavepointMigrationTestBase extends TestBaseUtils {
 
 	@Rule
@@ -116,7 +125,6 @@ public class SavepointMigrationTestBase extends TestBaseUtils {
 		// Submit the job
 		JobGraph jobGraph = env.getStreamGraph().getJobGraph();
 
-
 		JobSubmissionResult jobSubmissionResult = cluster.submitJobDetached(jobGraph);
 
 		LOG.info("Submitted job {} and waiting...", jobSubmissionResult.getJobID());
@@ -151,14 +159,9 @@ public class SavepointMigrationTestBase extends TestBaseUtils {
 		}
 
 		LOG.info("Triggering savepoint.");
-		// Flink 1.2
+
 		final Future<Object> savepointResultFuture =
 				jobManager.ask(new JobManagerMessages.TriggerSavepoint(jobSubmissionResult.getJobID(), Option.<String>empty()), DEADLINE.timeLeft());
-
-		// Flink 1.1
-//		final Future<Object> savepointResultFuture =
-//				jobManager.ask(new JobManagerMessages.TriggerSavepoint(jobSubmissionResult.getJobID()), DEADLINE.timeLeft());
-
 
 		Object savepointResult = Await.result(savepointResultFuture, DEADLINE.timeLeft());
 
@@ -170,24 +173,13 @@ public class SavepointMigrationTestBase extends TestBaseUtils {
 		final String jobmanagerSavepointPath = ((JobManagerMessages.TriggerSavepointSuccess) savepointResult).savepointPath();
 		LOG.info("Saved savepoint: " + jobmanagerSavepointPath);
 
-		// Flink 1.2
-		FileUtils.moveFile(new File(new URI(jobmanagerSavepointPath).getPath()), new File(savepointPath));
-
-		// Flink 1.1
-		// Retrieve the savepoint from the testing job manager
-//		LOG.info("Requesting the savepoint.");
-//		Future<Object> savepointFuture = jobManager.ask(new TestingJobManagerMessages.RequestSavepoint(jobmanagerSavepointPath), DEADLINE.timeLeft());
-//
-//		Savepoint savepoint = ((TestingJobManagerMessages.ResponseSavepoint) Await.result(savepointFuture, DEADLINE.timeLeft())).savepoint();
-//		LOG.info("Retrieved savepoint: " + jobmanagerSavepointPath + ".");
-//
-//		LOG.info("Storing savepoint to file.");
-//		Configuration config = new Configuration();
-//		config.setString(org.apache.flink.runtime.checkpoint.savepoint.SavepointStoreFactory.SAVEPOINT_BACKEND_KEY, "filesystem");
-//		config.setString(org.apache.flink.runtime.checkpoint.savepoint.SavepointStoreFactory.SAVEPOINT_DIRECTORY_KEY, "file:///Users/aljoscha/Downloads");
-//		String path = org.apache.flink.runtime.checkpoint.savepoint.SavepointStoreFactory.createFromConfig(config).storeSavepoint(savepoint);
-//
-//		FileUtils.moveFile(new File(new URI(path).getPath()), new File(savepointPath));
+		File jobManagerSavepoint = new File(new URI(jobmanagerSavepointPath).getPath());
+		// savepoints were changed to be directories in Flink 1.3
+		if (jobManagerSavepoint.isDirectory()) {
+			FileUtils.moveDirectory(jobManagerSavepoint, new File(savepointPath));
+		} else {
+			FileUtils.moveFile(jobManagerSavepoint, new File(savepointPath));
+		}
 	}
 
 	@SafeVarargs
@@ -207,11 +199,38 @@ public class SavepointMigrationTestBase extends TestBaseUtils {
 		JobSubmissionResult jobSubmissionResult = cluster.submitJobDetached(jobGraph);
 
 		StandaloneClusterClient clusterClient = new StandaloneClusterClient(cluster.configuration());
+		JobListeningContext jobListeningContext = clusterClient.connectToJob(jobSubmissionResult.getJobID());
 
 		boolean done = false;
 		while (DEADLINE.hasTimeLeft()) {
+
+			// try and get a job result, this will fail if the job already failed. Use this
+			// to get out of this loop
+			JobID jobId = jobSubmissionResult.getJobID();
+			FiniteDuration timeout = FiniteDuration.apply(5, TimeUnit.SECONDS);
+
+			try {
+
+				Future<Object> future = clusterClient
+						.getJobManagerGateway()
+						.ask(JobManagerMessages.getRequestJobStatus(jobSubmissionResult.getJobID()), timeout);
+
+				Object result = Await.result(future, timeout);
+
+				if (result instanceof JobManagerMessages.CurrentJobStatus) {
+					if (((JobManagerMessages.CurrentJobStatus) result).status() == JobStatus.FAILED) {
+						Object jobResult = Await.result(
+								jobListeningContext.getJobResultFuture(),
+								Duration.apply(5, TimeUnit.SECONDS));
+						fail("Job failed: " + jobResult);
+					}
+				}
+			} catch (Exception e) {
+				fail("Could not connect to job: " + e);
+			}
+
 			Thread.sleep(100);
-			Map<String, Object> accumulators = clusterClient.getAccumulators(jobSubmissionResult.getJobID());
+			Map<String, Object> accumulators = clusterClient.getAccumulators(jobId);
 
 			boolean allDone = true;
 			for (Tuple2<String, Integer> acc : expectedAccumulators) {

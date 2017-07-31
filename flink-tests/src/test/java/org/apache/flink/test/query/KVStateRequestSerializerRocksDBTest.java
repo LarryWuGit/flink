@@ -19,7 +19,6 @@
 package org.apache.flink.test.query;
 
 import org.apache.flink.api.common.ExecutionConfig;
-import org.apache.flink.api.common.JobID;
 import org.apache.flink.api.common.state.ListStateDescriptor;
 import org.apache.flink.api.common.state.MapStateDescriptor;
 import org.apache.flink.api.common.typeutils.TypeSerializer;
@@ -28,18 +27,16 @@ import org.apache.flink.api.common.typeutils.base.StringSerializer;
 import org.apache.flink.contrib.streaming.state.PredefinedOptions;
 import org.apache.flink.contrib.streaming.state.RocksDBKeyedStateBackend;
 import org.apache.flink.runtime.query.TaskKvStateRegistry;
-import org.apache.flink.runtime.query.netty.message.KvStateRequestSerializer;
 import org.apache.flink.runtime.query.netty.message.KvStateRequestSerializerTest;
 import org.apache.flink.runtime.state.KeyGroupRange;
 import org.apache.flink.runtime.state.VoidNamespace;
 import org.apache.flink.runtime.state.VoidNamespaceSerializer;
 import org.apache.flink.runtime.state.internal.InternalListState;
-
 import org.apache.flink.runtime.state.internal.InternalMapState;
+
 import org.junit.Rule;
 import org.junit.Test;
 import org.junit.rules.TemporaryFolder;
-
 import org.rocksdb.ColumnFamilyOptions;
 import org.rocksdb.DBOptions;
 
@@ -49,7 +46,8 @@ import static org.mockito.Mockito.mock;
 
 /**
  * Additional tests for the serialization and deserialization of {@link
- * KvStateRequestSerializer} with a RocksDB state back-end.
+ * org.apache.flink.runtime.query.netty.message.KvStateRequestSerializer}
+ * with a RocksDB state back-end.
  */
 public final class KVStateRequestSerializerRocksDBTest {
 
@@ -63,10 +61,9 @@ public final class KVStateRequestSerializerRocksDBTest {
 	 *
 	 * @param <K> key type
 	 */
-	final static class RocksDBKeyedStateBackend2<K> extends RocksDBKeyedStateBackend<K> {
+	static final class RocksDBKeyedStateBackend2<K> extends RocksDBKeyedStateBackend<K> {
 
 		RocksDBKeyedStateBackend2(
-				final JobID jobId,
 				final String operatorIdentifier,
 				final ClassLoader userCodeClassLoader,
 				final File instanceBasePath,
@@ -78,10 +75,10 @@ public final class KVStateRequestSerializerRocksDBTest {
 				final KeyGroupRange keyGroupRange,
 				final ExecutionConfig executionConfig) throws Exception {
 
-			super(jobId, operatorIdentifier, userCodeClassLoader,
+			super(operatorIdentifier, userCodeClassLoader,
 				instanceBasePath,
 				dbOptions, columnFamilyOptions, kvStateRegistry, keySerializer,
-				numberOfKeyGroups, keyGroupRange, executionConfig);
+				numberOfKeyGroups, keyGroupRange, executionConfig, false);
 		}
 
 		@Override
@@ -110,7 +107,7 @@ public final class KVStateRequestSerializerRocksDBTest {
 		ColumnFamilyOptions columnFamilyOptions = PredefinedOptions.DEFAULT.createColumnOptions();
 		final RocksDBKeyedStateBackend2<Long> longHeapKeyedStateBackend =
 			new RocksDBKeyedStateBackend2<>(
-				new JobID(), "no-op",
+				"no-op",
 				ClassLoader.getSystemClassLoader(),
 				temporaryFolder.getRoot(),
 				dbOptions,
@@ -120,6 +117,7 @@ public final class KVStateRequestSerializerRocksDBTest {
 				1, new KeyGroupRange(0, 0),
 				new ExecutionConfig()
 			);
+		longHeapKeyedStateBackend.restore(null);
 		longHeapKeyedStateBackend.setCurrentKey(key);
 
 		final InternalListState<VoidNamespace, Long> listState = longHeapKeyedStateBackend
@@ -128,7 +126,7 @@ public final class KVStateRequestSerializerRocksDBTest {
 
 		KvStateRequestSerializerTest.testListSerialization(key, listState);
 	}
-	
+
 	/**
 	 * Tests map serialization and deserialization match.
 	 *
@@ -146,7 +144,7 @@ public final class KVStateRequestSerializerRocksDBTest {
 		ColumnFamilyOptions columnFamilyOptions = PredefinedOptions.DEFAULT.createColumnOptions();
 		final RocksDBKeyedStateBackend<Long> longHeapKeyedStateBackend =
 			new RocksDBKeyedStateBackend<>(
-				new JobID(), "no-op",
+				"no-op",
 				ClassLoader.getSystemClassLoader(),
 				temporaryFolder.getRoot(),
 				dbOptions,
@@ -154,14 +152,15 @@ public final class KVStateRequestSerializerRocksDBTest {
 				mock(TaskKvStateRegistry.class),
 				LongSerializer.INSTANCE,
 				1, new KeyGroupRange(0, 0),
-				new ExecutionConfig()
-			);
+				new ExecutionConfig(),
+				false);
+		longHeapKeyedStateBackend.restore(null);
 		longHeapKeyedStateBackend.setCurrentKey(key);
 
-		final InternalMapState<VoidNamespace, Long, String> mapState = (InternalMapState<VoidNamespace, Long, String>) 
+		final InternalMapState<VoidNamespace, Long, String> mapState = (InternalMapState<VoidNamespace, Long, String>)
 				longHeapKeyedStateBackend.getPartitionedState(
 						VoidNamespace.INSTANCE,
-						VoidNamespaceSerializer.INSTANCE, 
+						VoidNamespaceSerializer.INSTANCE,
 						new MapStateDescriptor<>("test", LongSerializer.INSTANCE, StringSerializer.INSTANCE));
 
 		KvStateRequestSerializerTest.testMapSerialization(key, mapState);

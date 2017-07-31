@@ -15,6 +15,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 package org.apache.flink.streaming.runtime.operators.windowing.functions;
 
 import org.apache.flink.annotation.Internal;
@@ -44,6 +45,16 @@ public class InternalProcessWindowContext<IN, OUT, KEY, W extends Window>
 	@Override
 	public W window() {
 		return window;
+	}
+
+	@Override
+	public long currentProcessingTime() {
+		return internalContext.currentProcessingTime();
+	}
+
+	@Override
+	public long currentWatermark() {
+		return internalContext.currentWatermark();
 	}
 
 	@Override

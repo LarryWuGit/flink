@@ -18,9 +18,10 @@
 
 package org.apache.flink.graph.drivers.parameter;
 
-import org.apache.commons.lang3.text.StrBuilder;
 import org.apache.flink.api.java.utils.ParameterTool;
 import org.apache.flink.client.program.ProgramParametrizationException;
+
+import org.apache.commons.lang3.text.StrBuilder;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -45,14 +46,21 @@ implements Parameterized {
 	}
 
 	@Override
+	public String getName() {
+		return this.getClass().getSimpleName();
+	}
+
+	@Override
 	public String getUsage() {
 		StrBuilder strBuilder = new StrBuilder();
 
 		// print parameters as ordered list
 		for (Parameter<?> parameter : parameters) {
-			strBuilder
-				.append(parameter.getUsage())
-				.append(" ");
+			if (!parameter.isHidden()) {
+				strBuilder
+					.append(parameter.getUsage())
+					.append(" ");
+			}
 		}
 
 		return strBuilder.toString();

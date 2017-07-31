@@ -19,7 +19,7 @@
 package org.apache.flink.table.plan
 
 import org.apache.flink.api.common.typeutils.CompositeType
-import org.apache.flink.table.api.TableEnvironment
+import org.apache.flink.table.api.{OverWindow, TableEnvironment}
 import org.apache.flink.table.expressions._
 import org.apache.flink.table.plan.logical.{LogicalNode, Project}
 
@@ -221,6 +221,77 @@ object ProjectionTranslator {
     projectList
   }
 
+  def resolveOverWindows(
+      exprs: Seq[Expression],
+      overWindows: Array[OverWindow],
+      tEnv: TableEnvironment): Seq[Expression] = {
+
+    exprs.map(e => replaceOverCall(e, overWindows, tEnv))
+  }
+
+  /**
+    * Find and replace UnresolvedOverCall with OverCall
+    *
+    * @param expr    the expression to check
+    * @return an expression with correct resolved OverCall
+    */
+  private def replaceOverCall(
+    expr: Expression,
+    overWindows: Array[OverWindow],
+    tableEnv: TableEnvironment): Expression = {
+
+    expr match {
+      case u: UnresolvedOverCall =>
+        val overWindow = overWindows.find(_.alias.equals(u.alias))
+        if (overWindow.isDefined) {
+          OverCall(
+            u.agg,
+            overWindow.get.partitionBy,
+            overWindow.get.orderBy,
+            overWindow.get.preceding,
+            overWindow.get.following)
+        } else {
+          u
+        }
+
+      case u: UnaryExpression =>
+        val c = replaceOverCall(u.child, overWindows, tableEnv)
+        u.makeCopy(Array(c))
+
+      case b: BinaryExpression =>
+        val l = replaceOverCall(b.left, overWindows, tableEnv)
+        val r = replaceOverCall(b.right, overWindows, tableEnv)
+        b.makeCopy(Array(l, r))
+
+      // Functions calls
+      case c @ Call(name, args: Seq[Expression]) =>
+        val newArgs =
+          args.map(
+            (exp: Expression) =>
+              replaceOverCall(exp, overWindows, tableEnv))
+        c.makeCopy(Array(name, newArgs))
+
+      // Scala functions
+      case sfc @ ScalarFunctionCall(clazz, args: Seq[Expression]) =>
+        val newArgs: Seq[Expression] =
+          args.map(
+            (exp: Expression) =>
+              replaceOverCall(exp, overWindows, tableEnv))
+        sfc.makeCopy(Array(clazz, newArgs))
+
+      // Array constructor
+      case c @ ArrayConstructor(args) =>
+        val newArgs =
+          c.elements
+            .map((exp: Expression) => replaceOverCall(exp, overWindows, tableEnv))
+        c.makeCopy(Array(newArgs))
+
+      // Other expressions
+      case e: Expression => e
+    }
+  }
+
+
   /**
     * Extract all field references from the given expressions.
     *
@@ -245,23 +316,28 @@ object ProjectionTranslator {
       identifyFieldReferences(b.right, l)
 
     // Functions calls
-    case c @ Call(name, args) =>
+    case Call(_, args: Seq[Expression]) =>
       args.foldLeft(fieldReferences) {
         (fieldReferences, expr) => identifyFieldReferences(expr, fieldReferences)
       }
-    case sfc @ ScalarFunctionCall(clazz, args) =>
+    case ScalarFunctionCall(_, args: Seq[Expression]) =>
+      args.foldLeft(fieldReferences) {
+        (fieldReferences, expr) => identifyFieldReferences(expr, fieldReferences)
+      }
+
+    case AggFunctionCall(_, _, _, args) =>
       args.foldLeft(fieldReferences) {
         (fieldReferences, expr) => identifyFieldReferences(expr, fieldReferences)
       }
 
     // array constructor
-    case c @ ArrayConstructor(args) =>
+    case ArrayConstructor(args) =>
       args.foldLeft(fieldReferences) {
         (fieldReferences, expr) => identifyFieldReferences(expr, fieldReferences)
       }
 
     // ignore fields from window property
-    case w : WindowProperty =>
+    case _: WindowProperty =>
       fieldReferences
 
     // keep this case after all unwanted unary expressions
@@ -278,4 +354,56 @@ object ProjectionTranslator {
       }
   }
 
+  /**
+    * Find and replace UDAGG function Call to AggFunctionCall
+    *
+    * @param field    the expression to check
+    * @param tableEnv the TableEnvironment
+    * @return an expression with correct AggFunctionCall type for UDAGG functions
+    */
+  def replaceAggFunctionCall(field: Expression, tableEnv: TableEnvironment): Expression = {
+    field match {
+      case l: LeafExpression => l
+
+      case u: UnaryExpression =>
+        val c = replaceAggFunctionCall(u.child, tableEnv)
+        u.makeCopy(Array(c))
+
+      case b: BinaryExpression =>
+        val l = replaceAggFunctionCall(b.left, tableEnv)
+        val r = replaceAggFunctionCall(b.right, tableEnv)
+        b.makeCopy(Array(l, r))
+      // Functions calls
+      case c @ Call(name, args) =>
+        val function = tableEnv.getFunctionCatalog.lookupFunction(name, args)
+        function match {
+          case a: AggFunctionCall => a
+          case a: Aggregation => a
+          case p: AbstractWindowProperty => p
+          case _ =>
+            val newArgs =
+              args.map(
+                (exp: Expression) =>
+                  replaceAggFunctionCall(exp, tableEnv))
+            c.makeCopy(Array(name, newArgs))
+        }
+      // Scala functions
+      case sfc @ ScalarFunctionCall(clazz, args) =>
+        val newArgs: Seq[Expression] =
+          args.map(
+            (exp: Expression) =>
+              replaceAggFunctionCall(exp, tableEnv))
+        sfc.makeCopy(Array(clazz, newArgs))
+
+      // Array constructor
+      case c @ ArrayConstructor(args) =>
+        val newArgs =
+          c.elements
+            .map((exp: Expression) => replaceAggFunctionCall(exp, tableEnv))
+        c.makeCopy(Array(newArgs))
+
+      // Other expressions
+      case e: Expression => e
+    }
+  }
 }

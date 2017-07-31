@@ -18,16 +18,20 @@
 
 package org.apache.flink.graph.library.clustering.undirected;
 
-import org.apache.commons.math3.util.CombinatoricsUtils;
 import org.apache.flink.graph.asm.AsmTestBase;
 import org.apache.flink.graph.library.clustering.undirected.TriadicCensus.Result;
 import org.apache.flink.types.IntValue;
 import org.apache.flink.types.LongValue;
 import org.apache.flink.types.NullValue;
+
+import org.apache.commons.math3.util.CombinatoricsUtils;
 import org.junit.Test;
 
 import static org.junit.Assert.assertEquals;
 
+/**
+ * Tests for {@link TriadicCensus}.
+ */
 public class TriadicCensusTest
 extends AsmTestBase {
 
@@ -47,7 +51,7 @@ extends AsmTestBase {
 	public void testWithCompleteGraph()
 			throws Exception {
 		long expectedDegree = completeGraphVertexCount - 1;
-		long expectedCount = completeGraphVertexCount * CombinatoricsUtils.binomialCoefficient((int)expectedDegree, 2) / 3;
+		long expectedCount = completeGraphVertexCount * CombinatoricsUtils.binomialCoefficient((int) expectedDegree, 2) / 3;
 
 		Result expectedResult = new Result(0, 0, 0, expectedCount);
 
@@ -86,7 +90,7 @@ extends AsmTestBase {
 		Result expectedResult = new Result(113_435_893, 7_616_063, 778_295, 75_049);
 
 		Result triadCensus = new TriadicCensus<LongValue, NullValue, NullValue>()
-			.run(undirectedRMatGraph)
+			.run(undirectedRMatGraph(10, 16))
 			.execute();
 
 		assertEquals(expectedResult, triadCensus);

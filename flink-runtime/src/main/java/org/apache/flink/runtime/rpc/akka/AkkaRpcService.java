@@ -25,7 +25,6 @@ import akka.actor.ActorSystem;
 import akka.actor.Address;
 import akka.actor.Cancellable;
 import akka.actor.Identify;
-import akka.actor.PoisonPill;
 import akka.actor.Props;
 import akka.dispatch.Futures;
 import akka.dispatch.Mapper;
@@ -43,6 +42,7 @@ import org.apache.flink.runtime.rpc.RpcGateway;
 import org.apache.flink.runtime.rpc.RpcService;
 import org.apache.flink.runtime.rpc.SelfGateway;
 import org.apache.flink.runtime.rpc.StartStoppable;
+import org.apache.flink.runtime.rpc.akka.messages.Shutdown;
 import org.apache.flink.runtime.rpc.exceptions.RpcConnectionException;
 import org.apache.flink.util.Preconditions;
 import org.slf4j.Logger;
@@ -87,6 +87,7 @@ public class AkkaRpcService implements RpcService {
 	private final long maximumFramesize;
 
 	private final String address;
+	private final int port;
 
 	private final ScheduledExecutor internalScheduledExecutor;
 
@@ -111,12 +112,23 @@ public class AkkaRpcService implements RpcService {
 			address = "";
 		}
 
+		if (actorSystemAddress.port().isDefined()) {
+			port = (Integer) actorSystemAddress.port().get();
+		} else {
+			port = -1;
+		}
+
 		internalScheduledExecutor = new InternalScheduledExecutorImpl(actorSystem);
 	}
 
 	@Override
 	public String getAddress() {
 		return address;
+	}
+
+	@Override
+	public int getPort() {
+		return port;
 	}
 
 	// this method does not mutate state and is thus thread-safe
@@ -187,7 +199,7 @@ public class AkkaRpcService implements RpcService {
 
 		synchronized (lock) {
 			checkState(!stopped, "RpcService is stopped");
-			actorRef = actorSystem.actorOf(akkaRpcActorProps);
+			actorRef = actorSystem.actorOf(akkaRpcActorProps, rpcEndpoint.getEndpointId());
 			actors.add(actorRef);
 		}
 
@@ -245,8 +257,8 @@ public class AkkaRpcService implements RpcService {
 
 			if (fromThisService) {
 				ActorRef selfActorRef = akkaClient.getRpcEndpoint();
-				LOG.info("Stopping RPC endpoint {}.", selfActorRef.path());
-				selfActorRef.tell(PoisonPill.getInstance(), ActorRef.noSender());
+				LOG.info("Trigger shut down of RPC endpoint {}.", selfActorRef.path());
+				selfActorRef.tell(Shutdown.getInstance(), ActorRef.noSender());
 			} else {
 				LOG.debug("RPC endpoint {} already stopped or from different RPC service");
 			}

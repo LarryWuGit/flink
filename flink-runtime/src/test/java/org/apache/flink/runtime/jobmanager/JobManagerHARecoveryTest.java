@@ -43,7 +43,6 @@ import org.apache.flink.runtime.checkpoint.CheckpointMetaData;
 import org.apache.flink.runtime.checkpoint.CheckpointMetrics;
 import org.apache.flink.runtime.checkpoint.CheckpointOptions;
 import org.apache.flink.runtime.checkpoint.CheckpointRecoveryFactory;
-import org.apache.flink.runtime.checkpoint.CompletedCheckpoint;
 import org.apache.flink.runtime.checkpoint.CompletedCheckpointStore;
 import org.apache.flink.runtime.checkpoint.StandaloneCheckpointIDCounter;
 import org.apache.flink.runtime.checkpoint.SubtaskState;
@@ -52,6 +51,7 @@ import org.apache.flink.runtime.execution.librarycache.BlobLibraryCacheManager;
 import org.apache.flink.runtime.executiongraph.restart.FixedDelayRestartStrategy;
 import org.apache.flink.runtime.executiongraph.restart.RestartStrategyFactory;
 import org.apache.flink.runtime.highavailability.HighAvailabilityServices;
+import org.apache.flink.runtime.highavailability.TestingHighAvailabilityServices;
 import org.apache.flink.runtime.instance.ActorGateway;
 import org.apache.flink.runtime.instance.AkkaActorGateway;
 import org.apache.flink.runtime.instance.InstanceManager;
@@ -61,13 +61,12 @@ import org.apache.flink.runtime.jobgraph.JobVertex;
 import org.apache.flink.runtime.jobgraph.JobVertexID;
 import org.apache.flink.runtime.jobgraph.tasks.AbstractInvokable;
 import org.apache.flink.runtime.jobgraph.tasks.ExternalizedCheckpointSettings;
-import org.apache.flink.runtime.jobgraph.tasks.JobSnapshottingSettings;
+import org.apache.flink.runtime.jobgraph.tasks.JobCheckpointingSettings;
 import org.apache.flink.runtime.jobgraph.tasks.StatefulTask;
 import org.apache.flink.runtime.jobmanager.scheduler.Scheduler;
 import org.apache.flink.runtime.leaderelection.LeaderElectionService;
 import org.apache.flink.runtime.leaderelection.TestingLeaderElectionService;
 import org.apache.flink.runtime.leaderelection.TestingLeaderRetrievalService;
-import org.apache.flink.runtime.leaderretrieval.LeaderRetrievalService;
 import org.apache.flink.runtime.messages.JobManagerMessages;
 import org.apache.flink.runtime.metrics.MetricRegistry;
 import org.apache.flink.runtime.state.ChainedStateHandle;
@@ -81,9 +80,11 @@ import org.apache.flink.runtime.testingUtils.TestingMessages;
 import org.apache.flink.runtime.testingUtils.TestingTaskManager;
 import org.apache.flink.runtime.testingUtils.TestingTaskManagerMessages;
 import org.apache.flink.runtime.testingUtils.TestingUtils;
+import org.apache.flink.runtime.testutils.RecoverableCompletedCheckpointStore;
 import org.apache.flink.runtime.util.TestByteStreamStateHandleDeepCompare;
 import org.apache.flink.util.InstantiationUtil;
 
+import org.apache.flink.util.TestLogger;
 import org.junit.AfterClass;
 import org.junit.BeforeClass;
 import org.junit.Rule;
@@ -99,7 +100,6 @@ import scala.concurrent.duration.Deadline;
 import scala.concurrent.duration.FiniteDuration;
 import scala.runtime.BoxedUnit;
 
-import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
@@ -121,7 +121,7 @@ import static org.mockito.Matchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
-public class JobManagerHARecoveryTest {
+public class JobManagerHARecoveryTest extends TestLogger {
 
 	private static ActorSystem system;
 
@@ -164,13 +164,16 @@ public class JobManagerHARecoveryTest {
 			Scheduler scheduler = new Scheduler(TestingUtils.defaultExecutionContext());
 
 			MySubmittedJobGraphStore mySubmittedJobGraphStore = new MySubmittedJobGraphStore();
-			MyCheckpointStore checkpointStore = new MyCheckpointStore();
+			CompletedCheckpointStore checkpointStore = new RecoverableCompletedCheckpointStore();
 			CheckpointIDCounter checkpointCounter = new StandaloneCheckpointIDCounter();
 			CheckpointRecoveryFactory checkpointStateFactory = new MyCheckpointRecoveryFactory(checkpointStore, checkpointCounter);
 			TestingLeaderElectionService myLeaderElectionService = new TestingLeaderElectionService();
 			TestingLeaderRetrievalService myLeaderRetrievalService = new TestingLeaderRetrievalService(
-				"localhost",
-				HighAvailabilityServices.DEFAULT_LEADER_ID);
+				null,
+				null);
+			TestingHighAvailabilityServices testingHighAvailabilityServices = new TestingHighAvailabilityServices();
+
+			testingHighAvailabilityServices.setJobMasterLeaderRetriever(HighAvailabilityServices.DEFAULT_JOB_ID, myLeaderRetrievalService);
 
 			InstanceManager instanceManager = new InstanceManager();
 			instanceManager.addInstanceListener(scheduler);
@@ -184,7 +187,11 @@ public class JobManagerHARecoveryTest {
 				TestingUtils.defaultExecutor(),
 				instanceManager,
 				scheduler,
-				new BlobLibraryCacheManager(new BlobServer(flinkConfiguration), 3600000),
+				new BlobLibraryCacheManager(
+					new BlobServer(
+						flinkConfiguration,
+						testingHighAvailabilityServices.createBlobStore()),
+					3600000L),
 				archive,
 				new FixedDelayRestartStrategy.FixedDelayRestartStrategyFactory(Int.MaxValue(), 100),
 				timeout,
@@ -198,14 +205,14 @@ public class JobManagerHARecoveryTest {
 			ActorGateway gateway = new AkkaActorGateway(jobManager, leaderSessionID);
 
 			taskManager = TaskManager.startTaskManagerComponentsAndActor(
-					flinkConfiguration,
-					ResourceID.generate(),
-					system,
-					"localhost",
-					Option.apply("taskmanager"),
-					Option.apply((LeaderRetrievalService) myLeaderRetrievalService),
-					true,
-					TestingTaskManager.class);
+				flinkConfiguration,
+				ResourceID.generate(),
+				system,
+				testingHighAvailabilityServices,
+				"localhost",
+				Option.apply("taskmanager"),
+				true,
+				TestingTaskManager.class);
 
 			ActorGateway tmGateway = new AkkaActorGateway(taskManager, leaderSessionID);
 
@@ -220,13 +227,13 @@ public class JobManagerHARecoveryTest {
 			JobGraph jobGraph = new JobGraph("TestingJob", sourceJobVertex);
 
 			List<JobVertexID> vertexId = Collections.singletonList(sourceJobVertex.getID());
-			jobGraph.setSnapshotSettings(new JobSnapshottingSettings(
+			jobGraph.setSnapshotSettings(new JobCheckpointingSettings(
 					vertexId,
 					vertexId,
 					vertexId,
-					100,
-					10 * 60 * 1000,
-					0,
+					100L,
+					10L * 60L * 1000L,
+					0L,
 					1,
 					ExternalizedCheckpointSettings.none(),
 					null,
@@ -438,67 +445,6 @@ public class JobManagerHARecoveryTest {
 		}
 	}
 
-	/**
-	 * A checkpoint store, which supports shutdown and suspend. You can use this to test HA
-	 * as long as the factory always returns the same store instance.
-	 */
-	static class MyCheckpointStore implements CompletedCheckpointStore {
-
-		private final ArrayDeque<CompletedCheckpoint> checkpoints = new ArrayDeque<>(2);
-
-		private final ArrayDeque<CompletedCheckpoint> suspended = new ArrayDeque<>(2);
-
-		@Override
-		public void recover() throws Exception {
-			checkpoints.addAll(suspended);
-			suspended.clear();
-		}
-
-		@Override
-		public void addCheckpoint(CompletedCheckpoint checkpoint) throws Exception {
-			checkpoints.addLast(checkpoint);
-			if (checkpoints.size() > 1) {
-				checkpoints.removeFirst().subsume();
-			}
-		}
-
-		@Override
-		public CompletedCheckpoint getLatestCheckpoint() throws Exception {
-			return checkpoints.isEmpty() ? null : checkpoints.getLast();
-		}
-
-		@Override
-		public void shutdown(JobStatus jobStatus) throws Exception {
-			if (jobStatus.isGloballyTerminalState()) {
-				checkpoints.clear();
-				suspended.clear();
-			} else {
-				suspended.addAll(checkpoints);
-				checkpoints.clear();
-			}
-		}
-
-		@Override
-		public List<CompletedCheckpoint> getAllCheckpoints() throws Exception {
-			return new ArrayList<>(checkpoints);
-		}
-
-		@Override
-		public int getNumberOfRetainedCheckpoints() {
-			return checkpoints.size();
-		}
-
-		@Override
-		public int getMaxNumberOfRetainedCheckpoints() {
-			return 1;
-		}
-
-		@Override
-		public boolean requiresExternalizedCheckpoints() {
-			return false;
-		}
-	}
-
 	static class MyCheckpointRecoveryFactory implements CheckpointRecoveryFactory {
 
 		private final CompletedCheckpointStore store;
@@ -663,5 +609,4 @@ public class JobManagerHARecoveryTest {
 			return recoveredStates;
 		}
 	}
-
 }

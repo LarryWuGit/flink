@@ -14,6 +14,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 package org.apache.flink.streaming.api.functions.source;
 
 import org.apache.flink.annotation.Internal;
@@ -33,6 +34,7 @@ import org.apache.flink.runtime.state.FunctionSnapshotContext;
 import org.apache.flink.streaming.api.checkpoint.CheckpointedFunction;
 import org.apache.flink.streaming.api.checkpoint.CheckpointedRestoring;
 import org.apache.flink.util.Preconditions;
+
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -56,10 +58,10 @@ import java.util.TreeMap;
  *     <li>Assigning them to downstream tasks for further processing.</li>
  * </ol>
  *
- * The splits to be read are forwarded to the downstream {@link ContinuousFileReaderOperator}
+ * <p>The splits to be read are forwarded to the downstream {@link ContinuousFileReaderOperator}
  * which can have parallelism greater than one.
  *
- * <b>IMPORTANT NOTE: </b> Splits are forwarded downstream for reading in ascending modification time order,
+ * <p><b>IMPORTANT NOTE: </b> Splits are forwarded downstream for reading in ascending modification time order,
  * based on the modification time of the files they belong to.
  */
 @Internal
@@ -72,6 +74,7 @@ public class ContinuousFileMonitoringFunction<OUT>
 
 	/**
 	 * The minimum interval allowed between consecutive path scans.
+	 *
 	 * <p><b>NOTE:</b> Only applicable to the {@code PROCESS_CONTINUOUSLY} mode.
 	 */
 	public static final long MIN_MONITORING_INTERVAL = 1L;
@@ -83,7 +86,7 @@ public class ContinuousFileMonitoringFunction<OUT>
 	private final int readerParallelism;
 
 	/** The {@link FileInputFormat} to be read. */
-	private FileInputFormat<OUT> format;
+	private final FileInputFormat<OUT> format;
 
 	/** The interval between consecutive path scans. */
 	private final long interval;
@@ -132,7 +135,7 @@ public class ContinuousFileMonitoringFunction<OUT>
 		Preconditions.checkState(this.checkpointedState == null,
 			"The " + getClass().getSimpleName() + " has already been initialized.");
 
-		this.checkpointedState = context.getOperatorStateStore().getOperatorState(
+		this.checkpointedState = context.getOperatorStateStore().getListState(
 			new ListStateDescriptor<>(
 				"file-monitoring-state",
 				LongSerializer.INSTANCE
@@ -158,7 +161,7 @@ public class ContinuousFileMonitoringFunction<OUT>
 				// The two should be mutually exclusive for the operator, thus we throw the exception.
 
 				throw new IllegalArgumentException(
-					"The " + getClass().getSimpleName() +" has already restored from a previous Flink version.");
+					"The " + getClass().getSimpleName() + " has already restored from a previous Flink version.");
 
 			} else if (retrievedStates.size() == 1) {
 				this.globalModificationTime = retrievedStates.get(0);

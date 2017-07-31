@@ -53,7 +53,9 @@ import org.apache.flink.runtime.state.AbstractKeyedStateBackend;
 import org.apache.flink.runtime.state.AbstractStateBackend;
 import org.apache.flink.runtime.state.CheckpointStreamFactory;
 import org.apache.flink.runtime.state.CheckpointStreamFactory.CheckpointStateOutputStream;
+import org.apache.flink.runtime.state.DefaultOperatorStateBackend;
 import org.apache.flink.runtime.state.KeyGroupRange;
+import org.apache.flink.runtime.state.OperatorStateBackend;
 import org.apache.flink.runtime.state.OperatorStateCheckpointOutputStream;
 import org.apache.flink.runtime.state.StateSnapshotContext;
 import org.apache.flink.runtime.state.StreamStateHandle;
@@ -65,6 +67,7 @@ import org.apache.flink.runtime.util.TestingTaskManagerRuntimeInfo;
 import org.apache.flink.streaming.api.graph.StreamConfig;
 import org.apache.flink.streaming.api.operators.StreamFilter;
 import org.apache.flink.util.SerializedValue;
+
 import org.junit.Test;
 
 import java.io.IOException;
@@ -78,8 +81,7 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
 /**
- * This test checks that task checkpoints that block and do not react to thread interrupts
- * are
+ * This test checks that task checkpoints that block and do not react to thread interrupts.
  */
 public class BlockingCheckpointsTest {
 
@@ -187,6 +189,14 @@ public class BlockingCheckpointsTest {
 
 			throw new UnsupportedOperationException();
 		}
+
+		@Override
+		public OperatorStateBackend createOperatorStateBackend(Environment env, String operatorIdentifier) throws Exception {
+			return new DefaultOperatorStateBackend(
+				getClass().getClassLoader(),
+				new ExecutionConfig(),
+				true);
+		}
 	}
 
 	private static final class LockingOutputStreamFactory implements CheckpointStreamFactory {
@@ -271,10 +281,9 @@ public class BlockingCheckpointsTest {
 		}
 	}
 
-	// ------------------------------------------------------------------------
-	//  stream task that simply triggers a checkpoint
-	// ------------------------------------------------------------------------
-
+	/**
+	 * Stream task that simply triggers a checkpoint.
+	 */
 	public static final class TestStreamTask extends OneInputStreamTask<Object, Object> {
 
 		@Override

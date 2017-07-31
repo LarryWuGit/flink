@@ -30,12 +30,15 @@ import org.apache.flink.types.NullValue;
  * a directed graph where each undirected edge is represented by a directed
  * edge in each direction.
  *
- * This {@link Parameter} indicates whether to simplify the graph and if the
+ * <p>This {@link Parameter} indicates whether to simplify the graph and if the
  * graph should be directed or undirected.
  */
 public class Simplify
 implements Parameter<Ordering> {
 
+	/**
+	 * Whether and how to simplify the graph.
+	 */
 	public enum Ordering {
 		// leave the graph unchanged
 		NONE,
@@ -64,7 +67,12 @@ implements Parameter<Ordering> {
 
 	@Override
 	public String getUsage() {
-		return "[--simplify <directed | undirected [--clip_and_flip]>]";
+		return "[--simplify <directed | undirected [--clip_and_flip]>] ";
+	}
+
+	@Override
+	public boolean isHidden() {
+		return false;
 	}
 
 	@Override

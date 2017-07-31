@@ -18,18 +18,21 @@
 
 package org.apache.flink.yarn;
 
-import org.apache.flink.client.CliFrontend;
 import org.apache.flink.client.deployment.ClusterDescriptor;
+import org.apache.flink.client.deployment.ClusterSpecification;
 import org.apache.flink.configuration.ConfigConstants;
 import org.apache.flink.configuration.CoreOptions;
-import org.apache.flink.configuration.GlobalConfiguration;
-import org.apache.flink.configuration.IllegalConfigurationException;
-import org.apache.flink.configuration.SecurityOptions;
 import org.apache.flink.configuration.HighAvailabilityOptions;
+import org.apache.flink.configuration.IllegalConfigurationException;
+import org.apache.flink.configuration.JobManagerOptions;
+import org.apache.flink.configuration.SecurityOptions;
 import org.apache.flink.runtime.akka.AkkaUtils;
 import org.apache.flink.runtime.clusterframework.BootstrapTools;
 import org.apache.flink.runtime.jobgraph.JobGraph;
 import org.apache.flink.runtime.jobmanager.HighAvailabilityMode;
+import org.apache.flink.util.Preconditions;
+import org.apache.flink.yarn.configuration.YarnConfigOptions;
+
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
@@ -59,12 +62,14 @@ import org.apache.hadoop.yarn.util.Records;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import javax.annotation.Nullable;
+
 import java.io.ByteArrayOutputStream;
 import java.io.File;
-import java.io.IOException;
-import java.io.PrintStream;
 import java.io.FileOutputStream;
+import java.io.IOException;
 import java.io.ObjectOutputStream;
+import java.io.PrintStream;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.net.URISyntaxException;
@@ -75,6 +80,7 @@ import java.nio.file.SimpleFileVisitor;
 import java.nio.file.attribute.BasicFileAttributes;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collection;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -103,36 +109,24 @@ public abstract class AbstractYarnClusterDescriptor implements ClusterDescriptor
 	private Configuration conf = new YarnConfiguration();
 
 	/**
+	 * If the user has specified a different number of slots, we store them here
 	 * Files (usually in a distributed file system) used for the YARN session of Flink.
 	 * Contains configuration files and jar files.
 	 */
 	private Path sessionFilesDir;
 
-	/**
-	 * If the user has specified a different number of slots, we store them here
-	 */
-	private int slots = -1;
-
-	private int jobManagerMemoryMb = 1024;
-
-	private int taskManagerMemoryMb = 1024;
-
-	private int taskManagerCount = 1;
-
 	private String yarnQueue;
 
 	private String configurationDirectory;
-
-	private Path flinkConfigurationPath;
 
 	private Path flinkJarPath;
 
 	private String dynamicPropertiesEncoded;
 
-	/** Lazily initialized list of files to ship */
+	/** Lazily initialized list of files to ship. */
 	protected List<File> shipFiles = new LinkedList<>();
 
-	private org.apache.flink.configuration.Configuration flinkConfiguration;
+	private final org.apache.flink.configuration.Configuration flinkConfiguration;
 
 	private boolean detached;
 
@@ -141,74 +135,38 @@ public abstract class AbstractYarnClusterDescriptor implements ClusterDescriptor
 	private String zookeeperNamespace;
 
 	/** Optional Jar file to include in the system class loader of all application nodes
-	 * (for per-job submission) */
-	private Set<File> userJarFiles;
+	 * (for per-job submission). */
+	private final Set<File> userJarFiles = new HashSet<>();
 
-	public AbstractYarnClusterDescriptor() {
+	private YarnConfigOptions.UserJarInclusion userJarInclusion;
+
+	public AbstractYarnClusterDescriptor(
+		org.apache.flink.configuration.Configuration flinkConfiguration,
+		String configurationDirectory) {
 		// for unit tests only
-		if(System.getenv("IN_TESTS") != null) {
+		if (System.getenv("IN_TESTS") != null) {
 			try {
 				conf.addResource(new File(System.getenv("YARN_CONF_DIR") + "/yarn-site.xml").toURI().toURL());
 			} catch (Throwable t) {
-				throw new RuntimeException("Error",t);
+				throw new RuntimeException("Error", t);
 			}
 		}
 
-		// tries to load the config through the environment, if it fails it can still be set through the setters
-		try {
-			this.configurationDirectory = CliFrontend.getConfigurationDirectoryFromEnv();
-			this.flinkConfiguration = GlobalConfiguration.loadConfiguration(configurationDirectory);
+		this.flinkConfiguration = Preconditions.checkNotNull(flinkConfiguration);
+		userJarInclusion = getUserJarInclusionMode(flinkConfiguration);
 
-			File confFile = new File(configurationDirectory + File.separator + GlobalConfiguration.FLINK_CONF_FILENAME);
-			if (!confFile.exists()) {
-				throw new RuntimeException("Unable to locate configuration file in " + confFile);
-			}
-			flinkConfigurationPath = new Path(confFile.getAbsolutePath());
-
-			slots = flinkConfiguration.getInteger(ConfigConstants.TASK_MANAGER_NUM_TASK_SLOTS, 1);
-		} catch (Exception e) {
-			LOG.debug("Config couldn't be loaded from environment variable.");
-		}
+		this.configurationDirectory = Preconditions.checkNotNull(configurationDirectory);
 	}
 
 	/**
 	 * The class to bootstrap the application master of the Yarn cluster (runs main method).
 	 */
-	protected abstract Class<?> getApplicationMasterClass();
+	protected abstract String getYarnSessionClusterEntrypoint();
 
-	public void setJobManagerMemory(int memoryMb) {
-		if(memoryMb < MIN_JM_MEMORY) {
-			throw new IllegalArgumentException("The JobManager memory (" + memoryMb + ") is below the minimum required memory amount "
-				+ "of " + MIN_JM_MEMORY+ " MB");
-		}
-		this.jobManagerMemoryMb = memoryMb;
-	}
-
-	public void setTaskManagerMemory(int memoryMb) {
-		if(memoryMb < MIN_TM_MEMORY) {
-			throw new IllegalArgumentException("The TaskManager memory (" + memoryMb + ") is below the minimum required memory amount "
-				+ "of " + MIN_TM_MEMORY+ " MB");
-		}
-		this.taskManagerMemoryMb = memoryMb;
-	}
-
-	public void setFlinkConfiguration(org.apache.flink.configuration.Configuration conf) {
-		this.flinkConfiguration = conf;
-	}
+	protected abstract String getYarnJobClusterEntrypoint();
 
 	public org.apache.flink.configuration.Configuration getFlinkConfiguration() {
 		return flinkConfiguration;
-	}
-
-	public void setTaskManagerSlots(int slots) {
-		if(slots <= 0) {
-			throw new IllegalArgumentException("Number of TaskManager slots must be positive");
-		}
-		this.slots = slots;
-	}
-
-	public int getTaskManagerSlots() {
-		return this.slots;
 	}
 
 	public void setQueue(String queue) {
@@ -216,36 +174,17 @@ public abstract class AbstractYarnClusterDescriptor implements ClusterDescriptor
 	}
 
 	public void setLocalJarPath(Path localJarPath) {
-		if(!localJarPath.toString().endsWith("jar")) {
+		if (!localJarPath.toString().endsWith("jar")) {
 			throw new IllegalArgumentException("The passed jar path ('" + localJarPath + "') does not end with the 'jar' extension");
 		}
 		this.flinkJarPath = localJarPath;
-	}
-
-	public void setConfigurationFilePath(Path confPath) {
-		flinkConfigurationPath = confPath;
-	}
-
-	public void setConfigurationDirectory(String configurationDirectory) {
-		this.configurationDirectory = configurationDirectory;
-	}
-
-	public void setTaskManagerCount(int tmCount) {
-		if(tmCount < 1) {
-			throw new IllegalArgumentException("The TaskManager count has to be at least 1.");
-		}
-		this.taskManagerCount = tmCount;
-	}
-
-	public int getTaskManagerCount() {
-		return this.taskManagerCount;
 	}
 
 	public void addShipFiles(List<File> shipFiles) {
 		for (File shipFile: shipFiles) {
 			// remove uberjar from ship list (by default everything in the lib/ folder is added to
 			// the list of files to ship, but we handle the uberjar separately.
-			if(!(shipFile.getName().startsWith("flink-dist") && shipFile.getName().endsWith("jar"))) {
+			if (!(shipFile.getName().startsWith("flink-dist") && shipFile.getName().endsWith("jar"))) {
 				this.shipFiles.add(shipFile);
 			}
 		}
@@ -259,11 +198,14 @@ public abstract class AbstractYarnClusterDescriptor implements ClusterDescriptor
 	 * Returns true if the descriptor has the job jars to include in the classpath.
 	 */
 	public boolean hasUserJarFiles(List<URL> requiredJarFiles) {
-		if (userJarFiles == null || userJarFiles.size() != requiredJarFiles.size()) {
+		if (userJarInclusion == YarnConfigOptions.UserJarInclusion.DISABLED) {
+			return false;
+		}
+		if (userJarFiles.size() != requiredJarFiles.size()) {
 			return false;
 		}
 		try {
-			for(URL jarFile : requiredJarFiles) {
+			for (URL jarFile : requiredJarFiles) {
 				if (!userJarFiles.contains(new File(jarFile.toURI()))) {
 					return false;
 				}
@@ -278,37 +220,32 @@ public abstract class AbstractYarnClusterDescriptor implements ClusterDescriptor
 	 * Sets the user jar which is included in the system classloader of all nodes.
 	 */
 	public void setProvidedUserJarFiles(List<URL> userJarFiles) {
-		Set<File> localUserJarFiles = new HashSet<>(userJarFiles.size());
 		for (URL jarFile : userJarFiles) {
 			try {
-				localUserJarFiles.add(new File(jarFile.toURI()));
+				this.userJarFiles.add(new File(jarFile.toURI()));
 			} catch (URISyntaxException e) {
 				throw new IllegalArgumentException("Couldn't add local user jar: " + jarFile
 					+ " Currently only file:/// URLs are supported.");
 			}
 		}
-		this.userJarFiles = localUserJarFiles;
 	}
 
 	public String getDynamicPropertiesEncoded() {
 		return this.dynamicPropertiesEncoded;
 	}
 
+	private void isReadyForDeployment(ClusterSpecification clusterSpecification) throws YarnDeploymentException {
 
-	private void isReadyForDeployment() throws YarnDeploymentException {
-		if(taskManagerCount <= 0) {
+		if (clusterSpecification.getNumberTaskManagers() <= 0) {
 			throw new YarnDeploymentException("Taskmanager count must be positive");
 		}
-		if(this.flinkJarPath == null) {
+		if (this.flinkJarPath == null) {
 			throw new YarnDeploymentException("The Flink jar path is null");
 		}
-		if(this.configurationDirectory == null) {
+		if (this.configurationDirectory == null) {
 			throw new YarnDeploymentException("Configuration directory not set");
 		}
-		if(this.flinkConfigurationPath == null) {
-			throw new YarnDeploymentException("Configuration path not set");
-		}
-		if(this.flinkConfiguration == null) {
+		if (this.flinkConfiguration == null) {
 			throw new YarnDeploymentException("Flink configuration object has not been set");
 		}
 
@@ -316,7 +253,7 @@ public abstract class AbstractYarnClusterDescriptor implements ClusterDescriptor
 		// The number of cores can be configured in the config.
 		// If not configured, it is set to the number of task slots
 		int numYarnVcores = conf.getInt(YarnConfiguration.NM_VCORES, YarnConfiguration.DEFAULT_NM_VCORES);
-		int configuredVcores = flinkConfiguration.getInteger(ConfigConstants.YARN_VCORES, slots);
+		int configuredVcores = flinkConfiguration.getInteger(ConfigConstants.YARN_VCORES, clusterSpecification.getSlotsPerTaskManager());
 		// don't configure more than the maximum configured number of vcores
 		if (configuredVcores > numYarnVcores) {
 			throw new IllegalConfigurationException(
@@ -328,7 +265,7 @@ public abstract class AbstractYarnClusterDescriptor implements ClusterDescriptor
 		}
 
 		// check if required Hadoop environment variables are set. If not, warn user
-		if(System.getenv("HADOOP_CONF_DIR") == null &&
+		if (System.getenv("HADOOP_CONF_DIR") == null &&
 			System.getenv("YARN_CONF_DIR") == null) {
 			LOG.warn("Neither the HADOOP_CONF_DIR nor the YARN_CONF_DIR environment variable is set. " +
 				"The Flink YARN Client needs one of these to be set to properly load the Hadoop " +
@@ -337,8 +274,8 @@ public abstract class AbstractYarnClusterDescriptor implements ClusterDescriptor
 	}
 
 	private static boolean allocateResource(int[] nodeManagers, int toAllocate) {
-		for(int i = 0; i < nodeManagers.length; i++) {
-			if(nodeManagers[i] >= toAllocate) {
+		for (int i = 0; i < nodeManagers.length; i++) {
+			if (nodeManagers[i] >= toAllocate) {
 				nodeManagers[i] -= toAllocate;
 				return true;
 			}
@@ -363,7 +300,7 @@ public abstract class AbstractYarnClusterDescriptor implements ClusterDescriptor
 	}
 
 	/**
-	 * Gets a Hadoop Yarn client
+	 * Gets a Hadoop Yarn client.
 	 * @return Returns a YarnClient which has to be shutdown manually
 	 */
 	protected YarnClient getYarnClient() {
@@ -376,6 +313,7 @@ public abstract class AbstractYarnClusterDescriptor implements ClusterDescriptor
 	@Override
 	public YarnClusterClient retrieve(String applicationID) {
 
+		YarnClient yarnClient = null;
 		try {
 			// check if required Hadoop environment variables are set. If not, warn user
 			if (System.getenv("HADOOP_CONF_DIR") == null &&
@@ -386,7 +324,7 @@ public abstract class AbstractYarnClusterDescriptor implements ClusterDescriptor
 			}
 
 			final ApplicationId yarnAppId = ConverterUtils.toApplicationId(applicationID);
-			final YarnClient yarnClient = getYarnClient();
+			yarnClient = getYarnClient();
 			final ApplicationReport appReport = yarnClient.getApplicationReport(yarnAppId);
 
 			if (appReport.getFinalApplicationStatus() != FinalApplicationStatus.UNDEFINED) {
@@ -399,54 +337,243 @@ public abstract class AbstractYarnClusterDescriptor implements ClusterDescriptor
 			LOG.info("Found application JobManager host name '{}' and port '{}' from supplied application id '{}'",
 				appReport.getHost(), appReport.getRpcPort(), applicationID);
 
-			flinkConfiguration.setString(ConfigConstants.JOB_MANAGER_IPC_ADDRESS_KEY, appReport.getHost());
-			flinkConfiguration.setInteger(ConfigConstants.JOB_MANAGER_IPC_PORT_KEY, appReport.getRpcPort());
+			flinkConfiguration.setString(JobManagerOptions.ADDRESS, appReport.getHost());
+			flinkConfiguration.setInteger(JobManagerOptions.PORT, appReport.getRpcPort());
 
-			return createYarnClusterClient(this, yarnClient, appReport, flinkConfiguration, sessionFilesDir, false);
+			return createYarnClusterClient(
+				this,
+				-1, // we don't know the number of task managers of a started Flink cluster
+				-1, // we don't know how many slots each task manager has for a started Flink cluster
+				yarnClient,
+				appReport,
+				flinkConfiguration,
+				false);
 		} catch (Exception e) {
+			if (null != yarnClient) {
+				yarnClient.stop();
+			}
 			throw new RuntimeException("Couldn't retrieve Yarn cluster", e);
 		}
 	}
 
 	@Override
-	public YarnClusterClient deploy() {
+	public YarnClusterClient deploySessionCluster(ClusterSpecification clusterSpecification) {
 		try {
-			if(UserGroupInformation.isSecurityEnabled()) {
-				// note: UGI::hasKerberosCredentials inaccurately reports false
-				// for logins based on a keytab (fixed in Hadoop 2.6.1, see HADOOP-10786),
-				// so we check only in ticket cache scenario.
-				boolean useTicketCache = flinkConfiguration.getBoolean(SecurityOptions.KERBEROS_LOGIN_USETICKETCACHE);
-
-				UserGroupInformation loginUser = UserGroupInformation.getCurrentUser();
-				if (loginUser.getAuthenticationMethod() == UserGroupInformation.AuthenticationMethod.KERBEROS
-						&& useTicketCache && !loginUser.hasKerberosCredentials()) {
-					LOG.error("Hadoop security with Kerberos is enabled but the login user does not have Kerberos credentials");
-					throw new RuntimeException("Hadoop security with Kerberos is enabled but the login user " +
-							"does not have Kerberos credentials");
-				}
-			}
-			return deployInternal();
+			return deployInternal(
+				clusterSpecification,
+				getYarnSessionClusterEntrypoint(),
+				null);
 		} catch (Exception e) {
-			throw new RuntimeException("Couldn't deploy Yarn cluster", e);
+			throw new RuntimeException("Couldn't deploy Yarn session cluster", e);
+		}
+	}
+
+	@Override
+	public YarnClusterClient deployJobCluster(ClusterSpecification clusterSpecification, JobGraph jobGraph) {
+		try {
+			return deployInternal(
+				clusterSpecification,
+				getYarnJobClusterEntrypoint(),
+				jobGraph);
+		} catch (Exception e) {
+			throw new RuntimeException("Could not deploy Yarn job cluster.", e);
 		}
 	}
 
 	/**
 	 * This method will block until the ApplicationMaster/JobManager have been
 	 * deployed on YARN.
+	 *
+	 * @param clusterSpecification Initial cluster specification for the to be deployed Flink cluster
+	 * @param jobGraph A job graph which is deployed with the Flink cluster, null if none
 	 */
-	protected YarnClusterClient deployInternal() throws Exception {
-		isReadyForDeployment();
-		LOG.info("Using values:");
-		LOG.info("\tTaskManager count = {}", taskManagerCount);
-		LOG.info("\tJobManager memory = {}", jobManagerMemoryMb);
-		LOG.info("\tTaskManager memory = {}", taskManagerMemoryMb);
+	protected YarnClusterClient deployInternal(
+			ClusterSpecification clusterSpecification,
+			String yarnClusterEntrypoint,
+			@Nullable JobGraph jobGraph) throws Exception {
+
+		if (UserGroupInformation.isSecurityEnabled()) {
+			// note: UGI::hasKerberosCredentials inaccurately reports false
+			// for logins based on a keytab (fixed in Hadoop 2.6.1, see HADOOP-10786),
+			// so we check only in ticket cache scenario.
+			boolean useTicketCache = flinkConfiguration.getBoolean(SecurityOptions.KERBEROS_LOGIN_USETICKETCACHE);
+
+			UserGroupInformation loginUser = UserGroupInformation.getCurrentUser();
+			if (loginUser.getAuthenticationMethod() == UserGroupInformation.AuthenticationMethod.KERBEROS
+				&& useTicketCache && !loginUser.hasKerberosCredentials()) {
+				LOG.error("Hadoop security with Kerberos is enabled but the login user does not have Kerberos credentials");
+				throw new RuntimeException("Hadoop security with Kerberos is enabled but the login user " +
+					"does not have Kerberos credentials");
+			}
+		}
+
+		isReadyForDeployment(clusterSpecification);
 
 		final YarnClient yarnClient = getYarnClient();
 
-
 		// ------------------ Check if the specified queue exists --------------------
 
+		checkYarnQueues(yarnClient);
+
+		// ------------------ Add dynamic properties to local flinkConfiguraton ------
+		Map<String, String> dynProperties = getDynamicProperties(dynamicPropertiesEncoded);
+		for (Map.Entry<String, String> dynProperty : dynProperties.entrySet()) {
+			flinkConfiguration.setString(dynProperty.getKey(), dynProperty.getValue());
+		}
+
+		// ------------------ Check if the YARN ClusterClient has the requested resources --------------
+
+		// Create application via yarnClient
+		final YarnClientApplication yarnApplication = yarnClient.createApplication();
+		final GetNewApplicationResponse appResponse = yarnApplication.getNewApplicationResponse();
+
+		Resource maxRes = appResponse.getMaximumResourceCapability();
+
+		final ClusterResourceDescription freeClusterMem;
+		try {
+			freeClusterMem = getCurrentFreeClusterResources(yarnClient);
+		} catch (YarnException | IOException e) {
+			failSessionDuringDeployment(yarnClient, yarnApplication);
+			throw new YarnDeploymentException("Could not retrieve information about free cluster resources.", e);
+		}
+
+		final int yarnMinAllocationMB = conf.getInt("yarn.scheduler.minimum-allocation-mb", 0);
+
+		final ClusterSpecification validClusterSpecification;
+		try {
+			validClusterSpecification = validateClusterResources(
+				clusterSpecification,
+				yarnMinAllocationMB,
+				maxRes,
+				freeClusterMem);
+		} catch (YarnDeploymentException yde) {
+			failSessionDuringDeployment(yarnClient, yarnApplication);
+			throw yde;
+		}
+
+		LOG.info("Cluster specification: {}", validClusterSpecification);
+
+		ApplicationReport report = startAppMaster(
+			yarnClusterEntrypoint,
+			jobGraph,
+			yarnClient,
+			yarnApplication,
+			clusterSpecification);
+
+		String host = report.getHost();
+		int port = report.getRpcPort();
+
+		// Correctly initialize the Flink config
+		flinkConfiguration.setString(ConfigConstants.JOB_MANAGER_IPC_ADDRESS_KEY, host);
+		flinkConfiguration.setInteger(ConfigConstants.JOB_MANAGER_IPC_PORT_KEY, port);
+
+		// the Flink cluster is deployed in YARN. Represent cluster
+		return createYarnClusterClient(
+			this,
+			clusterSpecification.getNumberTaskManagers(),
+			clusterSpecification.getSlotsPerTaskManager(),
+			yarnClient,
+			report,
+			flinkConfiguration,
+			true);
+	}
+
+	protected ClusterSpecification validateClusterResources(
+		ClusterSpecification clusterSpecification,
+		int yarnMinAllocationMB,
+		Resource maximumResourceCapability,
+		ClusterResourceDescription freeClusterResources) throws YarnDeploymentException {
+
+		int taskManagerCount = clusterSpecification.getNumberTaskManagers();
+		int jobManagerMemoryMb = clusterSpecification.getMasterMemoryMB();
+		int taskManagerMemoryMb = clusterSpecification.getTaskManagerMemoryMB();
+
+		if (jobManagerMemoryMb < MIN_JM_MEMORY) {
+			LOG.warn("The minimum JobManager memory is {}. Will set the JobManager memory to this value.", MIN_JM_MEMORY);
+			jobManagerMemoryMb = MIN_JM_MEMORY;
+		}
+
+		if (taskManagerMemoryMb < MIN_TM_MEMORY) {
+			LOG.warn("The minimum TaskManager memory is {}. Will set the Taskmanager memory to this value.", MIN_TM_MEMORY);
+			taskManagerMemoryMb = MIN_TM_MEMORY;
+		}
+
+		if (jobManagerMemoryMb < yarnMinAllocationMB || taskManagerMemoryMb < yarnMinAllocationMB) {
+			LOG.warn("The JobManager or TaskManager memory is below the smallest possible YARN Container size. "
+				+ "The value of 'yarn.scheduler.minimum-allocation-mb' is '" + yarnMinAllocationMB + "'. Please increase the memory size." +
+				"YARN will allocate the smaller containers but the scheduler will account for the minimum-allocation-mb, maybe not all instances " +
+				"you requested will start.");
+		}
+
+		// set the memory to minAllocationMB to do the next checks correctly
+		if (jobManagerMemoryMb < yarnMinAllocationMB) {
+			jobManagerMemoryMb =  yarnMinAllocationMB;
+		}
+		if (taskManagerMemoryMb < yarnMinAllocationMB) {
+			taskManagerMemoryMb =  yarnMinAllocationMB;
+		}
+
+		final String note = "Please check the 'yarn.scheduler.maximum-allocation-mb' and the 'yarn.nodemanager.resource.memory-mb' configuration values\n";
+		if (jobManagerMemoryMb > maximumResourceCapability.getMemory()) {
+			throw new YarnDeploymentException("The cluster does not have the requested resources for the JobManager available!\n"
+				+ "Maximum Memory: " + maximumResourceCapability.getMemory() + "MB Requested: " + jobManagerMemoryMb + "MB. " + note);
+		}
+
+		if (taskManagerMemoryMb > maximumResourceCapability.getMemory()) {
+			throw new YarnDeploymentException("The cluster does not have the requested resources for the TaskManagers available!\n"
+				+ "Maximum Memory: " + maximumResourceCapability.getMemory() + " Requested: " + taskManagerMemoryMb + "MB. " + note);
+		}
+
+		final String noteRsc = "\nThe Flink YARN client will try to allocate the YARN session, but maybe not all TaskManagers are " +
+			"connecting from the beginning because the resources are currently not available in the cluster. " +
+			"The allocation might take more time than usual because the Flink YARN client needs to wait until " +
+			"the resources become available.";
+		int totalMemoryRequired = jobManagerMemoryMb + taskManagerMemoryMb * taskManagerCount;
+
+		if (freeClusterResources.totalFreeMemory < totalMemoryRequired) {
+			LOG.warn("This YARN session requires " + totalMemoryRequired + "MB of memory in the cluster. "
+				+ "There are currently only " + freeClusterResources.totalFreeMemory + "MB available." + noteRsc);
+
+		}
+		if (taskManagerMemoryMb > freeClusterResources.containerLimit) {
+			LOG.warn("The requested amount of memory for the TaskManagers (" + taskManagerMemoryMb + "MB) is more than "
+				+ "the largest possible YARN container: " + freeClusterResources.containerLimit + noteRsc);
+		}
+		if (jobManagerMemoryMb > freeClusterResources.containerLimit) {
+			LOG.warn("The requested amount of memory for the JobManager (" + jobManagerMemoryMb + "MB) is more than "
+				+ "the largest possible YARN container: " + freeClusterResources.containerLimit + noteRsc);
+		}
+
+		// ----------------- check if the requested containers fit into the cluster.
+
+		int[] nmFree = Arrays.copyOf(freeClusterResources.nodeManagersFree, freeClusterResources.nodeManagersFree.length);
+		// first, allocate the jobManager somewhere.
+		if (!allocateResource(nmFree, jobManagerMemoryMb)) {
+			LOG.warn("Unable to find a NodeManager that can fit the JobManager/Application master. " +
+				"The JobManager requires " + jobManagerMemoryMb + "MB. NodeManagers available: " +
+				Arrays.toString(freeClusterResources.nodeManagersFree) + noteRsc);
+		}
+		// allocate TaskManagers
+		for (int i = 0; i < taskManagerCount; i++) {
+			if (!allocateResource(nmFree, taskManagerMemoryMb)) {
+				LOG.warn("There is not enough memory available in the YARN cluster. " +
+					"The TaskManager(s) require " + taskManagerMemoryMb + "MB each. " +
+					"NodeManagers available: " + Arrays.toString(freeClusterResources.nodeManagersFree) + "\n" +
+					"After allocating the JobManager (" + jobManagerMemoryMb + "MB) and (" + i + "/" + taskManagerCount + ") TaskManagers, " +
+					"the following NodeManagers are available: " + Arrays.toString(nmFree)  + noteRsc);
+			}
+		}
+
+		return new ClusterSpecification.ClusterSpecificationBuilder()
+			.setMasterMemoryMB(jobManagerMemoryMb)
+			.setTaskManagerMemoryMB(taskManagerMemoryMb)
+			.setNumberTaskManagers(clusterSpecification.getNumberTaskManagers())
+			.setSlotsPerTaskManager(clusterSpecification.getSlotsPerTaskManager())
+			.createClusterSpecification();
+
+	}
+
+	private void checkYarnQueues(YarnClient yarnClient) {
 		try {
 			List<QueueInfo> queues = yarnClient.getAllQueues();
 			if (queues.size() > 0 && this.yarnQueue != null) { // check only if there are queues configured in yarn and for this session.
@@ -468,111 +595,20 @@ public abstract class AbstractYarnClusterDescriptor implements ClusterDescriptor
 			} else {
 				LOG.debug("The YARN cluster does not have any queues configured");
 			}
-		} catch(Throwable e) {
+		} catch (Throwable e) {
 			LOG.warn("Error while getting queue information from YARN: " + e.getMessage());
-			if(LOG.isDebugEnabled()) {
+			if (LOG.isDebugEnabled()) {
 				LOG.debug("Error details", e);
 			}
 		}
-
-		// ------------------ Add dynamic properties to local flinkConfiguraton ------
-		Map<String, String> dynProperties = getDynamicProperties(dynamicPropertiesEncoded);
-		for (Map.Entry<String, String> dynProperty : dynProperties.entrySet()) {
-			flinkConfiguration.setString(dynProperty.getKey(), dynProperty.getValue());
-		}
-
-		// ------------------ Check if the YARN ClusterClient has the requested resources --------------
-
-		// the yarnMinAllocationMB specifies the smallest possible container allocation size.
-		// all allocations below this value are automatically set to this value.
-		final int yarnMinAllocationMB = conf.getInt("yarn.scheduler.minimum-allocation-mb", 0);
-		if(jobManagerMemoryMb < yarnMinAllocationMB || taskManagerMemoryMb < yarnMinAllocationMB) {
-			LOG.warn("The JobManager or TaskManager memory is below the smallest possible YARN Container size. "
-				+ "The value of 'yarn.scheduler.minimum-allocation-mb' is '" + yarnMinAllocationMB + "'. Please increase the memory size." +
-				"YARN will allocate the smaller containers but the scheduler will account for the minimum-allocation-mb, maybe not all instances " +
-				"you requested will start.");
-		}
-
-		// set the memory to minAllocationMB to do the next checks correctly
-		if(jobManagerMemoryMb < yarnMinAllocationMB) {
-			jobManagerMemoryMb =  yarnMinAllocationMB;
-		}
-		if(taskManagerMemoryMb < yarnMinAllocationMB) {
-			taskManagerMemoryMb =  yarnMinAllocationMB;
-		}
-
-		// Create application via yarnClient
-		final YarnClientApplication yarnApplication = yarnClient.createApplication();
-		GetNewApplicationResponse appResponse = yarnApplication.getNewApplicationResponse();
-
-		Resource maxRes = appResponse.getMaximumResourceCapability();
-		final String NOTE = "Please check the 'yarn.scheduler.maximum-allocation-mb' and the 'yarn.nodemanager.resource.memory-mb' configuration values\n";
-		if(jobManagerMemoryMb > maxRes.getMemory() ) {
-			failSessionDuringDeployment(yarnClient, yarnApplication);
-			throw new YarnDeploymentException("The cluster does not have the requested resources for the JobManager available!\n"
-				+ "Maximum Memory: " + maxRes.getMemory() + "MB Requested: " + jobManagerMemoryMb + "MB. " + NOTE);
-		}
-
-		if(taskManagerMemoryMb > maxRes.getMemory() ) {
-			failSessionDuringDeployment(yarnClient, yarnApplication);
-			throw new YarnDeploymentException("The cluster does not have the requested resources for the TaskManagers available!\n"
-				+ "Maximum Memory: " + maxRes.getMemory() + " Requested: " + taskManagerMemoryMb + "MB. " + NOTE);
-		}
-
-		final String NOTE_RSC = "\nThe Flink YARN client will try to allocate the YARN session, but maybe not all TaskManagers are " +
-			"connecting from the beginning because the resources are currently not available in the cluster. " +
-			"The allocation might take more time than usual because the Flink YARN client needs to wait until " +
-			"the resources become available.";
-		int totalMemoryRequired = jobManagerMemoryMb + taskManagerMemoryMb * taskManagerCount;
-		ClusterResourceDescription freeClusterMem = getCurrentFreeClusterResources(yarnClient);
-		if(freeClusterMem.totalFreeMemory < totalMemoryRequired) {
-			LOG.warn("This YARN session requires " + totalMemoryRequired + "MB of memory in the cluster. "
-				+ "There are currently only " + freeClusterMem.totalFreeMemory + "MB available." + NOTE_RSC);
-
-		}
-		if(taskManagerMemoryMb > freeClusterMem.containerLimit) {
-			LOG.warn("The requested amount of memory for the TaskManagers (" + taskManagerMemoryMb + "MB) is more than "
-				+ "the largest possible YARN container: " + freeClusterMem.containerLimit + NOTE_RSC);
-		}
-		if(jobManagerMemoryMb > freeClusterMem.containerLimit) {
-			LOG.warn("The requested amount of memory for the JobManager (" + jobManagerMemoryMb + "MB) is more than "
-				+ "the largest possible YARN container: " + freeClusterMem.containerLimit + NOTE_RSC);
-		}
-
-		// ----------------- check if the requested containers fit into the cluster.
-
-		int[] nmFree = Arrays.copyOf(freeClusterMem.nodeManagersFree, freeClusterMem.nodeManagersFree.length);
-		// first, allocate the jobManager somewhere.
-		if(!allocateResource(nmFree, jobManagerMemoryMb)) {
-			LOG.warn("Unable to find a NodeManager that can fit the JobManager/Application master. " +
-				"The JobManager requires " + jobManagerMemoryMb + "MB. NodeManagers available: " +
-				Arrays.toString(freeClusterMem.nodeManagersFree) + NOTE_RSC);
-		}
-		// allocate TaskManagers
-		for(int i = 0; i < taskManagerCount; i++) {
-			if(!allocateResource(nmFree, taskManagerMemoryMb)) {
-				LOG.warn("There is not enough memory available in the YARN cluster. " +
-					"The TaskManager(s) require " + taskManagerMemoryMb + "MB each. " +
-					"NodeManagers available: " + Arrays.toString(freeClusterMem.nodeManagersFree) + "\n" +
-					"After allocating the JobManager (" + jobManagerMemoryMb + "MB) and (" + i + "/" + taskManagerCount + ") TaskManagers, " +
-					"the following NodeManagers are available: " + Arrays.toString(nmFree)  + NOTE_RSC );
-			}
-		}
-
-		ApplicationReport report = startAppMaster(null, yarnClient, yarnApplication);
-
-		String host = report.getHost();
-		int port = report.getRpcPort();
-
-		// Correctly initialize the Flink config
-		flinkConfiguration.setString(ConfigConstants.JOB_MANAGER_IPC_ADDRESS_KEY, host);
-		flinkConfiguration.setInteger(ConfigConstants.JOB_MANAGER_IPC_PORT_KEY, port);
-
-		// the Flink cluster is deployed in YARN. Represent cluster
-		return createYarnClusterClient(this, yarnClient, report, flinkConfiguration, sessionFilesDir, true);
 	}
 
-	public ApplicationReport startAppMaster(JobGraph jobGraph, YarnClient yarnClient, YarnClientApplication yarnApplication) throws Exception {
+	public ApplicationReport startAppMaster(
+			String yarnClusterEntrypoint,
+			JobGraph jobGraph,
+			YarnClient yarnClient,
+			YarnClientApplication yarnApplication,
+			ClusterSpecification clusterSpecification) throws Exception {
 
 		// ------------------ Set default file system scheme -------------------------
 
@@ -597,22 +633,22 @@ public abstract class AbstractYarnClusterDescriptor implements ClusterDescriptor
 		}
 
 		ApplicationSubmissionContext appContext = yarnApplication.getApplicationSubmissionContext();
-		Set<File> effectiveShipFiles = new HashSet<>(shipFiles.size());
+		Set<File> systemShipFiles = new HashSet<>(shipFiles.size());
 		for (File file : shipFiles) {
-			effectiveShipFiles.add(file.getAbsoluteFile());
+			systemShipFiles.add(file.getAbsoluteFile());
 		}
 
 		//check if there is a logback or log4j file
 		File logbackFile = new File(configurationDirectory + File.separator + CONFIG_FILE_LOGBACK_NAME);
 		final boolean hasLogback = logbackFile.exists();
 		if (hasLogback) {
-			effectiveShipFiles.add(logbackFile);
+			systemShipFiles.add(logbackFile);
 		}
 
 		File log4jFile = new File(configurationDirectory + File.separator + CONFIG_FILE_LOG4J_NAME);
 		final boolean hasLog4j = log4jFile.exists();
 		if (hasLog4j) {
-			effectiveShipFiles.add(log4jFile);
+			systemShipFiles.add(log4jFile);
 			if (hasLogback) {
 				// this means there is already a logback configuration file --> fail
 				LOG.warn("The configuration directory ('" + configurationDirectory + "') contains both LOG4J and " +
@@ -620,13 +656,7 @@ public abstract class AbstractYarnClusterDescriptor implements ClusterDescriptor
 			}
 		}
 
-		addLibFolderToShipFiles(effectiveShipFiles);
-
-		// add the user jar to the classpath of the to-be-created cluster
-		if (userJarFiles != null) {
-			effectiveShipFiles.addAll(userJarFiles);
-		}
-
+		addLibFolderToShipFiles(systemShipFiles);
 
 		// Set-up ApplicationSubmissionContext for the application
 
@@ -659,65 +689,80 @@ public abstract class AbstractYarnClusterDescriptor implements ClusterDescriptor
 					1));
 		}
 
+		if (jobGraph != null) {
+			// add the user code jars from the provided JobGraph
+			for (org.apache.flink.core.fs.Path path : jobGraph.getUserJars()) {
+				userJarFiles.add(new File(path.toUri()));
+			}
+		}
+
 		// local resource map for Yarn
-		final Map<String, LocalResource> localResources = new HashMap<>(2 + effectiveShipFiles.size());
+		final Map<String, LocalResource> localResources = new HashMap<>(2 + systemShipFiles.size() + userJarFiles.size());
 		// list of remote paths (after upload)
-		final List<Path> paths = new ArrayList<>(2 + effectiveShipFiles.size());
-		// classpath assembler
-		final StringBuilder classPathBuilder = new StringBuilder();
+		final List<Path> paths = new ArrayList<>(2 + systemShipFiles.size() + userJarFiles.size());
 		// ship list that enables reuse of resources for task manager containers
 		StringBuilder envShipFileList = new StringBuilder();
 
 		// upload and register ship files
-		for (File shipFile : effectiveShipFiles) {
-			LocalResource shipResources = Records.newRecord(LocalResource.class);
+		List<String> systemClassPaths = uploadAndRegisterFiles(systemShipFiles, fs, appId.toString(), paths, localResources, envShipFileList);
 
-			Path shipLocalPath = new Path("file://" + shipFile.getAbsolutePath());
-			Path remotePath =
-				Utils.setupLocalResource(fs, appId.toString(), shipLocalPath, shipResources, fs.getHomeDirectory());
+		List<String> userClassPaths;
+		if (userJarInclusion != YarnConfigOptions.UserJarInclusion.DISABLED) {
+			userClassPaths = uploadAndRegisterFiles(userJarFiles, fs, appId.toString(), paths, localResources, envShipFileList);
+		} else {
+			userClassPaths = Collections.emptyList();
+		}
 
-			paths.add(remotePath);
+		if (userJarInclusion == YarnConfigOptions.UserJarInclusion.ORDER) {
+			systemClassPaths.addAll(userClassPaths);
+		}
 
-			localResources.put(shipFile.getName(), shipResources);
+		// normalize classpath by sorting
+		Collections.sort(systemClassPaths);
+		Collections.sort(userClassPaths);
 
-			if (shipFile.isDirectory()) {
-				// add directories to the classpath
-				java.nio.file.Path shipPath = shipFile.toPath();
-				final java.nio.file.Path parentPath = shipPath.getParent();
-
-				Files.walkFileTree(shipPath, new SimpleFileVisitor<java.nio.file.Path>() {
-					@Override
-					public FileVisitResult preVisitDirectory(java.nio.file.Path dir, BasicFileAttributes attrs)
-							throws IOException {
-						super.preVisitDirectory(dir, attrs);
-
-						java.nio.file.Path relativePath = parentPath.relativize(dir);
-
-						classPathBuilder
-							.append(relativePath)
-							.append(File.separator)
-							.append("*")
-							.append(File.pathSeparator);
-
-						return FileVisitResult.CONTINUE;
-					}
-				});
-			} else {
-				// add files to the classpath
-				classPathBuilder.append(shipFile.getName()).append(File.pathSeparator);
+		// classpath assembler
+		StringBuilder classPathBuilder = new StringBuilder();
+		if (userJarInclusion == YarnConfigOptions.UserJarInclusion.FIRST) {
+			for (String userClassPath : userClassPaths) {
+				classPathBuilder.append(userClassPath).append(File.pathSeparator);
 			}
-
-			envShipFileList.append(remotePath).append(",");
+		}
+		for (String classPath : systemClassPaths) {
+			classPathBuilder.append(classPath).append(File.pathSeparator);
+		}
+		if (userJarInclusion == YarnConfigOptions.UserJarInclusion.LAST) {
+			for (String userClassPath : userClassPaths) {
+				classPathBuilder.append(userClassPath).append(File.pathSeparator);
+			}
 		}
 
 		// Setup jar for ApplicationMaster
 		LocalResource appMasterJar = Records.newRecord(LocalResource.class);
-		LocalResource flinkConf = Records.newRecord(LocalResource.class);
-		Path remotePathJar =
-			Utils.setupLocalResource(fs, appId.toString(), flinkJarPath, appMasterJar, fs.getHomeDirectory());
-		Path remotePathConf =
-			Utils.setupLocalResource(fs, appId.toString(), flinkConfigurationPath, flinkConf, fs.getHomeDirectory());
+		Path remotePathJar = Utils.setupLocalResource(
+			fs,
+			appId.toString(),
+			flinkJarPath,
+			appMasterJar,
+			fs.getHomeDirectory());
+
 		localResources.put("flink.jar", appMasterJar);
+
+		// Upload the flink configuration
+		LocalResource flinkConf = Records.newRecord(LocalResource.class);
+
+		// write out configuration file
+		File tmpConfigurationFile = File.createTempFile(appId + "-flink-conf.yaml", null);
+		tmpConfigurationFile.deleteOnExit();
+		BootstrapTools.writeConfiguration(flinkConfiguration, tmpConfigurationFile);
+
+		Path remotePathConf = Utils.setupLocalResource(
+			fs,
+			appId.toString(),
+			new Path(tmpConfigurationFile.getAbsolutePath()),
+			flinkConf,
+			fs.getHomeDirectory());
+
 		localResources.put("flink-conf.yaml", flinkConf);
 
 		paths.add(remotePathJar);
@@ -747,10 +792,10 @@ public abstract class AbstractYarnClusterDescriptor implements ClusterDescriptor
 			}
 		}
 
-		sessionFilesDir = new Path(fs.getHomeDirectory(), ".flink/" + appId.toString() + "/");
+		Path yarnFilesDir = new Path(fs.getHomeDirectory(), ".flink/" + appId + '/');
 
 		FsPermission permission = new FsPermission(FsAction.ALL, FsAction.NONE, FsAction.NONE);
-		fs.setPermission(sessionFilesDir, permission); // set permission for path.
+		fs.setPermission(yarnFilesDir, permission); // set permission for path.
 
 		//To support Yarn Secure Integration Test Scenario
 		//In Integration test setup, the Yarn containers created by YarnMiniCluster does not have the Yarn site XML
@@ -759,9 +804,9 @@ public abstract class AbstractYarnClusterDescriptor implements ClusterDescriptor
 		Path remoteKrb5Path = null;
 		Path remoteYarnSiteXmlPath = null;
 		boolean hasKrb5 = false;
-		if(System.getenv("IN_TESTS") != null) {
+		if (System.getenv("IN_TESTS") != null) {
 			String krb5Config = System.getProperty("java.security.krb5.conf");
-			if(krb5Config != null && krb5Config.length() != 0) {
+			if (krb5Config != null && krb5Config.length() != 0) {
 				File krb5 = new File(krb5Config);
 				LOG.info("Adding KRB5 configuration {} to the AM container local resource bucket", krb5.getAbsolutePath());
 				LocalResource krb5ConfResource = Records.newRecord(LocalResource.class);
@@ -769,7 +814,7 @@ public abstract class AbstractYarnClusterDescriptor implements ClusterDescriptor
 				remoteKrb5Path = Utils.setupLocalResource(fs, appId.toString(), krb5ConfPath, krb5ConfResource, fs.getHomeDirectory());
 				localResources.put(Utils.KRB5_FILE_NAME, krb5ConfResource);
 
-				File f = new File(System.getenv("YARN_CONF_DIR"),Utils.YARN_SITE_FILE_NAME);
+				File f = new File(System.getenv("YARN_CONF_DIR"), Utils.YARN_SITE_FILE_NAME);
 				LOG.info("Adding Yarn configuration {} to the AM container local resource bucket", f.getAbsolutePath());
 				LocalResource yarnConfResource = Records.newRecord(LocalResource.class);
 				Path yarnSitePath = new Path(f.getAbsolutePath());
@@ -784,7 +829,7 @@ public abstract class AbstractYarnClusterDescriptor implements ClusterDescriptor
 		LocalResource keytabResource = null;
 		Path remotePathKeytab = null;
 		String keytab = flinkConfiguration.getString(SecurityOptions.KERBEROS_LOGIN_KEYTAB);
-		if(keytab != null) {
+		if (keytab != null) {
 			LOG.info("Adding keytab {} to the AM container local resource bucket", keytab);
 			keytabResource = Records.newRecord(LocalResource.class);
 			Path keytabPath = new Path(keytab);
@@ -792,10 +837,15 @@ public abstract class AbstractYarnClusterDescriptor implements ClusterDescriptor
 			localResources.put(Utils.KEYTAB_FILE_NAME, keytabResource);
 		}
 
-		final ContainerLaunchContext amContainer = setupApplicationMasterContainer(hasLogback, hasLog4j, hasKrb5);
+		final ContainerLaunchContext amContainer = setupApplicationMasterContainer(
+			yarnClusterEntrypoint,
+			hasLogback,
+			hasLog4j,
+			hasKrb5,
+			clusterSpecification.getMasterMemoryMB());
 
-		if ( UserGroupInformation.isSecurityEnabled() && keytab == null ) {
-			//set tokens only when keytab is not provided
+		if (UserGroupInformation.isSecurityEnabled()) {
+			// set HDFS delegation tokens when security is enabled
 			LOG.info("Adding delegation token to the AM container..");
 			Utils.setTokensFor(amContainer, paths, conf);
 		}
@@ -811,32 +861,33 @@ public abstract class AbstractYarnClusterDescriptor implements ClusterDescriptor
 		appMasterEnv.put(YarnConfigKeys.ENV_FLINK_CLASSPATH, classPathBuilder.toString());
 
 		// set Flink on YARN internal configuration values
-		appMasterEnv.put(YarnConfigKeys.ENV_TM_COUNT, String.valueOf(taskManagerCount));
-		appMasterEnv.put(YarnConfigKeys.ENV_TM_MEMORY, String.valueOf(taskManagerMemoryMb));
-		appMasterEnv.put(YarnConfigKeys.FLINK_JAR_PATH, remotePathJar.toString() );
+		appMasterEnv.put(YarnConfigKeys.ENV_TM_COUNT, String.valueOf(clusterSpecification.getNumberTaskManagers()));
+		appMasterEnv.put(YarnConfigKeys.ENV_TM_MEMORY, String.valueOf(clusterSpecification.getTaskManagerMemoryMB()));
+		appMasterEnv.put(YarnConfigKeys.FLINK_JAR_PATH, remotePathJar.toString());
 		appMasterEnv.put(YarnConfigKeys.ENV_APP_ID, appId.toString());
 		appMasterEnv.put(YarnConfigKeys.ENV_CLIENT_HOME_DIR, fs.getHomeDirectory().toString());
 		appMasterEnv.put(YarnConfigKeys.ENV_CLIENT_SHIP_FILES, envShipFileList.toString());
-		appMasterEnv.put(YarnConfigKeys.ENV_SLOTS, String.valueOf(slots));
+		appMasterEnv.put(YarnConfigKeys.ENV_SLOTS, String.valueOf(clusterSpecification.getSlotsPerTaskManager()));
 		appMasterEnv.put(YarnConfigKeys.ENV_DETACHED, String.valueOf(detached));
 		appMasterEnv.put(YarnConfigKeys.ENV_ZOOKEEPER_NAMESPACE, getZookeeperNamespace());
+		appMasterEnv.put(YarnConfigKeys.FLINK_YARN_FILES, yarnFilesDir.toUri().toString());
 
 		// https://github.com/apache/hadoop/blob/trunk/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-site/src/site/markdown/YarnApplicationSecurity.md#identity-on-an-insecure-cluster-hadoop_user_name
 		appMasterEnv.put(YarnConfigKeys.ENV_HADOOP_USER_NAME, UserGroupInformation.getCurrentUser().getUserName());
 
-		if(keytabResource != null) {
-			appMasterEnv.put(YarnConfigKeys.KEYTAB_PATH, remotePathKeytab.toString() );
+		if (keytabResource != null) {
+			appMasterEnv.put(YarnConfigKeys.KEYTAB_PATH, remotePathKeytab.toString());
 			String principal = flinkConfiguration.getString(SecurityOptions.KERBEROS_LOGIN_PRINCIPAL);
-			appMasterEnv.put(YarnConfigKeys.KEYTAB_PRINCIPAL, principal );
+			appMasterEnv.put(YarnConfigKeys.KEYTAB_PRINCIPAL, principal);
 		}
 
 		//To support Yarn Secure Integration Test Scenario
-		if(remoteYarnSiteXmlPath != null && remoteKrb5Path != null) {
+		if (remoteYarnSiteXmlPath != null && remoteKrb5Path != null) {
 			appMasterEnv.put(YarnConfigKeys.ENV_YARN_SITE_XML_PATH, remoteYarnSiteXmlPath.toString());
-			appMasterEnv.put(YarnConfigKeys.ENV_KRB5_PATH, remoteKrb5Path.toString() );
+			appMasterEnv.put(YarnConfigKeys.ENV_KRB5_PATH, remoteKrb5Path.toString());
 		}
 
-		if(dynamicPropertiesEncoded != null) {
+		if (dynamicPropertiesEncoded != null) {
 			appMasterEnv.put(YarnConfigKeys.ENV_DYNAMIC_PROPERTIES, dynamicPropertiesEncoded);
 		}
 
@@ -847,13 +898,13 @@ public abstract class AbstractYarnClusterDescriptor implements ClusterDescriptor
 
 		// Set up resource type requirements for ApplicationMaster
 		Resource capability = Records.newRecord(Resource.class);
-		capability.setMemory(jobManagerMemoryMb);
+		capability.setMemory(clusterSpecification.getMasterMemoryMB());
 		capability.setVirtualCores(1);
 
 		String name;
-		if(customName == null) {
-			name = "Flink session with " + taskManagerCount + " TaskManagers";
-			if(detached) {
+		if (customName == null) {
+			name = "Flink session with " + clusterSpecification.getNumberTaskManagers() + " TaskManagers";
+			if (detached) {
 				name += " (detached)";
 			}
 		} else {
@@ -864,14 +915,14 @@ public abstract class AbstractYarnClusterDescriptor implements ClusterDescriptor
 		appContext.setApplicationType("Apache Flink");
 		appContext.setAMContainerSpec(amContainer);
 		appContext.setResource(capability);
-		if(yarnQueue != null) {
+		if (yarnQueue != null) {
 			appContext.setQueue(yarnQueue);
 		}
 
 		setApplicationTags(appContext);
 
 		// add a hook to clean up in case deployment fails
-		Thread deploymentFailureHook = new DeploymentFailureHook(yarnClient, yarnApplication);
+		Thread deploymentFailureHook = new DeploymentFailureHook(yarnClient, yarnApplication, yarnFilesDir);
 		Runtime.getRuntime().addShutdownHook(deploymentFailureHook);
 		LOG.info("Submitting application master " + appId);
 		yarnClient.submitApplication(appContext);
@@ -880,7 +931,7 @@ public abstract class AbstractYarnClusterDescriptor implements ClusterDescriptor
 		final long startTime = System.currentTimeMillis();
 		ApplicationReport report;
 		YarnApplicationState lastAppState = YarnApplicationState.NEW;
-		loop: while( true ) {
+		loop: while (true) {
 			try {
 				report = yarnClient.getApplicationReport(appId);
 			} catch (IOException e) {
@@ -905,7 +956,7 @@ public abstract class AbstractYarnClusterDescriptor implements ClusterDescriptor
 					if (appState != lastAppState) {
 						LOG.info("Deploying cluster, current state " + appState);
 					}
-					if(System.currentTimeMillis() - startTime > 60000) {
+					if (System.currentTimeMillis() - startTime > 60000) {
 						LOG.info("Deployment took more than 60 seconds. Please check if the requested resources are available in the YARN cluster");
 					}
 
@@ -929,10 +980,55 @@ public abstract class AbstractYarnClusterDescriptor implements ClusterDescriptor
 		return report;
 	}
 
+	private static List<String> uploadAndRegisterFiles(
+			Collection<File> shipFiles,
+			FileSystem fs,
+			String appId,
+			List<Path> remotePaths,
+			Map<String, LocalResource> localResources,
+			StringBuilder envShipFileList) throws IOException {
+		final List<String> classPaths = new ArrayList<>(2 + shipFiles.size());
+		for (File shipFile : shipFiles) {
+			LocalResource shipResources = Records.newRecord(LocalResource.class);
+
+			Path shipLocalPath = new Path("file://" + shipFile.getAbsolutePath());
+			Path remotePath =
+				Utils.setupLocalResource(fs, appId, shipLocalPath, shipResources, fs.getHomeDirectory());
+
+			remotePaths.add(remotePath);
+
+			localResources.put(shipFile.getName(), shipResources);
+
+			if (shipFile.isDirectory()) {
+				// add directories to the classpath
+				java.nio.file.Path shipPath = shipFile.toPath();
+				final java.nio.file.Path parentPath = shipPath.getParent();
+
+				Files.walkFileTree(shipPath, new SimpleFileVisitor<java.nio.file.Path>() {
+					@Override
+					public FileVisitResult visitFile(java.nio.file.Path file, BasicFileAttributes attrs)
+						throws IOException {
+						java.nio.file.Path relativePath = parentPath.relativize(file);
+
+						classPaths.add(relativePath.toString());
+
+						return FileVisitResult.CONTINUE;
+					}
+				});
+			} else {
+				// add files to the classpath
+				classPaths.add(shipFile.getName());
+			}
+
+			envShipFileList.append(remotePath).append(",");
+		}
+		return classPaths;
+	}
+
 	/**
 	 * Kills YARN application and stops YARN client.
 	 *
-	 * Use this method to kill the App before it has been properly deployed
+	 * <p>Use this method to kill the App before it has been properly deployed
 	 */
 	private void failSessionDuringDeployment(YarnClient yarnClient, YarnClientApplication yarnApplication) {
 		LOG.info("Killing YARN application");
@@ -947,11 +1043,10 @@ public abstract class AbstractYarnClusterDescriptor implements ClusterDescriptor
 		yarnClient.stop();
 	}
 
-
 	private static class ClusterResourceDescription {
-		final public int totalFreeMemory;
-		final public int containerLimit;
-		final public int[] nodeManagersFree;
+		public final int totalFreeMemory;
+		public final int containerLimit;
+		public final int[] nodeManagersFree;
 
 		public ClusterResourceDescription(int totalFreeMemory, int containerLimit, int[] nodeManagersFree) {
 			this.totalFreeMemory = totalFreeMemory;
@@ -967,12 +1062,12 @@ public abstract class AbstractYarnClusterDescriptor implements ClusterDescriptor
 		int containerLimit = 0;
 		int[] nodeManagersFree = new int[nodes.size()];
 
-		for(int i = 0; i < nodes.size(); i++) {
+		for (int i = 0; i < nodes.size(); i++) {
 			NodeReport rep = nodes.get(i);
-			int free = rep.getCapability().getMemory() - (rep.getUsed() != null ? rep.getUsed().getMemory() : 0 );
+			int free = rep.getCapability().getMemory() - (rep.getUsed() != null ? rep.getUsed().getMemory() : 0);
 			nodeManagersFree[i] = free;
 			totalFreeMemory += free;
-			if(free > containerLimit) {
+			if (free > containerLimit) {
 				containerLimit = free;
 			}
 		}
@@ -1020,12 +1115,8 @@ public abstract class AbstractYarnClusterDescriptor implements ClusterDescriptor
 		}
 	}
 
-	public String getSessionFilesDir() {
-		return sessionFilesDir.toString();
-	}
-
 	public void setName(String name) {
-		if(name == null) {
+		if (name == null) {
 			throw new IllegalArgumentException("The passed name is null");
 		}
 		customName = name;
@@ -1063,9 +1154,9 @@ public abstract class AbstractYarnClusterDescriptor implements ClusterDescriptor
 	 * Singleton object which uses reflection to determine whether the {@link ApplicationSubmissionContext}
 	 * supports various methods which, depending on the Hadoop version, may or may not be supported.
 	 *
-	 * If an unsupported method is invoked, nothing happens.
+	 * <p>If an unsupported method is invoked, nothing happens.
 	 *
-	 * Currently three methods are proxied:
+	 * <p>Currently three methods are proxied:
 	 * - setApplicationTags (>= 2.4.0)
 	 * - setAttemptFailuresValidityInterval (>= 2.6.0)
 	 * - setKeepContainersAcrossApplicationAttempts (>= 2.4.0)
@@ -1189,22 +1280,28 @@ public abstract class AbstractYarnClusterDescriptor implements ClusterDescriptor
 
 	private class DeploymentFailureHook extends Thread {
 
-		DeploymentFailureHook(YarnClient yarnClient, YarnClientApplication yarnApplication) {
-			this.yarnClient = yarnClient;
-			this.yarnApplication = yarnApplication;
-		}
+		private final YarnClient yarnClient;
+		private final YarnClientApplication yarnApplication;
+		private final Path yarnFilesDir;
 
-		private YarnClient yarnClient;
-		private YarnClientApplication yarnApplication;
+		DeploymentFailureHook(YarnClient yarnClient, YarnClientApplication yarnApplication, Path yarnFilesDir) {
+			this.yarnClient = Preconditions.checkNotNull(yarnClient);
+			this.yarnApplication = Preconditions.checkNotNull(yarnApplication);
+			this.yarnFilesDir = Preconditions.checkNotNull(yarnFilesDir);
+		}
 
 		@Override
 		public void run() {
 			LOG.info("Cancelling deployment from Deployment Failure Hook");
 			failSessionDuringDeployment(yarnClient, yarnApplication);
-			LOG.info("Deleting files in " + sessionFilesDir);
+			LOG.info("Deleting files in {}.", yarnFilesDir);
 			try {
 				FileSystem fs = FileSystem.get(conf);
-				fs.delete(sessionFilesDir, true);
+
+				if (!fs.delete(yarnFilesDir, true)) {
+					throw new IOException("Deleting files in " + yarnFilesDir + " was unsuccessful");
+				}
+
 				fs.close();
 			} catch (IOException e) {
 				LOG.error("Failed to delete Flink Jar and conf files in HDFS", e);
@@ -1212,7 +1309,7 @@ public abstract class AbstractYarnClusterDescriptor implements ClusterDescriptor
 		}
 	}
 
-	protected void addLibFolderToShipFiles(Set<File> effectiveShipFiles) {
+	protected void addLibFolderToShipFiles(Collection<File> effectiveShipFiles) {
 		// Add lib folder to the ship files if the environment variable is set.
 		// This is for convenience when running from the command-line.
 		// (for other files users explicitly set the ship files)
@@ -1231,9 +1328,12 @@ public abstract class AbstractYarnClusterDescriptor implements ClusterDescriptor
 		}
 	}
 
-	protected ContainerLaunchContext setupApplicationMasterContainer(boolean hasLogback,
-																	boolean hasLog4j,
-																	boolean hasKrb5) {
+	protected ContainerLaunchContext setupApplicationMasterContainer(
+			String yarnClusterEntrypoint,
+			boolean hasLogback,
+			boolean hasLog4j,
+			boolean hasKrb5,
+			int jobManagerMemoryMb) {
 		// ------------------ Prepare Application Master Container  ------------------------------
 
 		// respect custom JVM options in the YAML file
@@ -1261,17 +1361,17 @@ public abstract class AbstractYarnClusterDescriptor implements ClusterDescriptor
 		if (hasLogback || hasLog4j) {
 			logging = "-Dlog.file=\"" + ApplicationConstants.LOG_DIR_EXPANSION_VAR + "/jobmanager.log\"";
 
-			if(hasLogback) {
+			if (hasLogback) {
 				logging += " -Dlogback.configurationFile=file:" + CONFIG_FILE_LOGBACK_NAME;
 			}
 
-			if(hasLog4j) {
+			if (hasLog4j) {
 				logging += " -Dlog4j.configuration=file:" + CONFIG_FILE_LOG4J_NAME;
 			}
 		}
 
 		startCommandValues.put("logging", logging);
-		startCommandValues.put("class", getApplicationMasterClass().getName());
+		startCommandValues.put("class", yarnClusterEntrypoint);
 		startCommandValues.put("redirects",
 			"1> " + ApplicationConstants.LOG_DIR_EXPANSION_VAR + "/jobmanager.out " +
 			"2> " + ApplicationConstants.LOG_DIR_EXPANSION_VAR + "/jobmanager.err");
@@ -1290,22 +1390,37 @@ public abstract class AbstractYarnClusterDescriptor implements ClusterDescriptor
 		return amContainer;
 	}
 
+	private static YarnConfigOptions.UserJarInclusion getUserJarInclusionMode(org.apache.flink.configuration.Configuration config) {
+		String configuredUserJarInclusion = config.getString(YarnConfigOptions.CLASSPATH_INCLUDE_USER_JAR);
+		try {
+			return YarnConfigOptions.UserJarInclusion.valueOf(configuredUserJarInclusion.toUpperCase());
+		} catch (IllegalArgumentException e) {
+			LOG.warn("Configuration parameter {} was configured with an invalid value {}. Falling back to default ({}).",
+				YarnConfigOptions.CLASSPATH_INCLUDE_USER_JAR.key(),
+				configuredUserJarInclusion,
+				YarnConfigOptions.CLASSPATH_INCLUDE_USER_JAR.defaultValue());
+			return YarnConfigOptions.UserJarInclusion.valueOf(YarnConfigOptions.CLASSPATH_INCLUDE_USER_JAR.defaultValue());
+		}
+	}
+
 	/**
-	 * Creates a YarnClusterClient; may be overriden in tests
+	 * Creates a YarnClusterClient; may be overriden in tests.
 	 */
 	protected YarnClusterClient createYarnClusterClient(
 			AbstractYarnClusterDescriptor descriptor,
+			int numberTaskManagers,
+			int slotsPerTaskManager,
 			YarnClient yarnClient,
 			ApplicationReport report,
 			org.apache.flink.configuration.Configuration flinkConfiguration,
-			Path sessionFilesDir,
-			boolean perJobCluster) throws IOException, YarnException {
+			boolean perJobCluster) throws Exception {
 		return new YarnClusterClient(
 			descriptor,
+			numberTaskManagers,
+			slotsPerTaskManager,
 			yarnClient,
 			report,
 			flinkConfiguration,
-			sessionFilesDir,
 			perJobCluster);
 	}
 }

@@ -38,7 +38,6 @@ public class TimestampsAndPunctuatedWatermarksOperator<T>
 
 	private long currentWatermark = Long.MIN_VALUE;
 
-
 	public TimestampsAndPunctuatedWatermarksOperator(AssignerWithPunctuatedWatermarks<T> assigner) {
 		super(assigner);
 		this.chainingStrategy = ChainingStrategy.ALWAYS;
@@ -47,7 +46,7 @@ public class TimestampsAndPunctuatedWatermarksOperator<T>
 	@Override
 	public void processElement(StreamRecord<T> element) throws Exception {
 		final T value = element.getValue();
-		final long newTimestamp = userFunction.extractTimestamp(value, 
+		final long newTimestamp = userFunction.extractTimestamp(value,
 				element.hasTimestamp() ? element.getTimestamp() : Long.MIN_VALUE);
 
 		output.collect(element.replace(element.getValue(), newTimestamp));

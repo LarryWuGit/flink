@@ -25,7 +25,9 @@ import org.apache.flink.api.common.time.Time;
 import org.apache.flink.configuration.Configuration;
 import org.apache.flink.configuration.UnmodifiableConfiguration;
 import org.apache.flink.runtime.akka.AkkaUtils;
+import org.apache.flink.runtime.blob.BlobServer;
 import org.apache.flink.runtime.client.JobExecutionException;
+import org.apache.flink.runtime.clusterframework.FlinkResourceManager;
 import org.apache.flink.runtime.clusterframework.types.ResourceID;
 import org.apache.flink.runtime.concurrent.Future;
 import org.apache.flink.runtime.heartbeat.HeartbeatServices;
@@ -38,8 +40,10 @@ import org.apache.flink.runtime.metrics.MetricRegistry;
 import org.apache.flink.runtime.metrics.MetricRegistryConfiguration;
 import org.apache.flink.runtime.resourcemanager.ResourceManagerGateway;
 import org.apache.flink.runtime.resourcemanager.ResourceManagerRunner;
+import org.apache.flink.runtime.rpc.FatalErrorHandler;
 import org.apache.flink.runtime.rpc.RpcService;
 import org.apache.flink.runtime.rpc.akka.AkkaRpcService;
+import org.apache.flink.runtime.taskexecutor.TaskExecutor;
 import org.apache.flink.runtime.taskexecutor.TaskManagerRunner;
 import org.apache.flink.util.ExceptionUtils;
 
@@ -83,13 +87,16 @@ public class MiniCluster {
 	private HighAvailabilityServices haServices;
 
 	@GuardedBy("lock")
+	private BlobServer blobServer;
+
+	@GuardedBy("lock")
 	private HeartbeatServices heartbeatServices;
 
 	@GuardedBy("lock")
 	private ResourceManagerRunner[] resourceManagerRunners;
 
 	@GuardedBy("lock")
-	private TaskManagerRunner[] taskManagerRunners;
+	private TaskExecutor[] taskManagers;
 
 	@GuardedBy("lock")
 	private MiniClusterJobDispatcher jobDispatcher;
@@ -234,7 +241,11 @@ public class MiniCluster {
 
 				// create the high-availability services
 				LOG.info("Starting high-availability services");
-				haServices = HighAvailabilityServicesUtils.createAvailableOrEmbeddedServices(configuration);
+				haServices = HighAvailabilityServicesUtils.createAvailableOrEmbeddedServices(
+					configuration,
+					commonRpcService.getExecutor());
+
+				blobServer = new BlobServer(configuration, haServices.createBlobStore());
 
 				heartbeatServices = HeartbeatServices.fromConfiguration(configuration);
 
@@ -250,7 +261,7 @@ public class MiniCluster {
 
 				// bring up the TaskManager(s) for the mini cluster
 				LOG.info("Starting {} TaskManger(s)", numTaskManagers);
-				taskManagerRunners = startTaskManagers(
+				taskManagers = startTaskManagers(
 						configuration, haServices, metricRegistry, numTaskManagers, taskManagerRpcServices);
 
 				// bring up the dispatcher that launches JobManagers when jobs submitted
@@ -258,6 +269,7 @@ public class MiniCluster {
 				jobDispatcher = new MiniClusterJobDispatcher(
 					configuration,
 					haServices,
+					blobServer,
 					heartbeatServices,
 					metricRegistry,
 					numJobManagers,
@@ -335,17 +347,17 @@ public class MiniCluster {
 			resourceManagerRunners = null;
 		}
 
-		if (taskManagerRunners != null) {
-			for (TaskManagerRunner tm : taskManagerRunners) {
+		if (taskManagers != null) {
+			for (TaskExecutor tm : taskManagers) {
 				if (tm != null) {
 					try {
-						tm.shutDown(null);
+						tm.shutDown();
 					} catch (Throwable t) {
 						exception = firstOrSuppressed(t, exception);
 					}
 				}
 			}
-			taskManagerRunners = null;
+			taskManagers = null;
 		}
 
 		// shut down the RpcServices
@@ -357,6 +369,16 @@ public class MiniCluster {
 		jobManagerRpcServices = null;
 		taskManagerRpcServices = null;
 		resourceManagerRpcServices = null;
+
+		// shut down the blob server
+		if (blobServer != null) {
+			try {
+				blobServer.close();
+			} catch (Exception e) {
+				exception = firstOrSuppressed(e, exception);
+			}
+			blobServer = null;
+		}
 
 		// shut down high-availability services
 		if (haServices != null) {
@@ -399,7 +421,7 @@ public class MiniCluster {
 			final ResourceManagerGateway resourceManager = 
 					commonRpcService.connect(addressAndId.leaderAddress(), ResourceManagerGateway.class).get();
 
-			final int numTaskManagersToWaitFor = taskManagerRunners.length;
+			final int numTaskManagersToWaitFor = taskManagers.length;
 
 			// poll and wait until enough TaskManagers are available
 			while (true) {
@@ -524,6 +546,7 @@ public class MiniCluster {
 
 			resourceManagerRunners[i] = new ResourceManagerRunner(
 				ResourceID.generate(),
+				FlinkResourceManager.RESOURCE_MANAGER_NAME + '_' + i,
 				configuration,
 				resourceManagerRpcServices[i],
 				haServices,
@@ -536,30 +559,31 @@ public class MiniCluster {
 		return resourceManagerRunners;
 	}
 
-	protected TaskManagerRunner[] startTaskManagers(
+	protected TaskExecutor[] startTaskManagers(
 			Configuration configuration,
 			HighAvailabilityServices haServices,
 			MetricRegistry metricRegistry,
 			int numTaskManagers,
 			RpcService[] taskManagerRpcServices) throws Exception {
 
-		final TaskManagerRunner[] taskManagerRunners = new TaskManagerRunner[numTaskManagers];
+		final TaskExecutor[] taskExecutors = new TaskExecutor[numTaskManagers];
 		final boolean localCommunication = numTaskManagers == 1;
 
 		for (int i = 0; i < numTaskManagers; i++) {
-			taskManagerRunners[i] = new TaskManagerRunner(
+			taskExecutors[i] = TaskManagerRunner.startTaskManager(
 				configuration,
 				new ResourceID(UUID.randomUUID().toString()),
 				taskManagerRpcServices[i],
 				haServices,
 				heartbeatServices,
 				metricRegistry,
-				localCommunication);
+				localCommunication,
+				new TerminatingFatalErrorHandler(i));
 
-			taskManagerRunners[i].start();
+			taskExecutors[i].start();
 		}
 
-		return taskManagerRunners;
+		return taskExecutors;
 	}
 
 	// ------------------------------------------------------------------------
@@ -609,5 +633,30 @@ public class MiniCluster {
 		}
 
 		return config;
+	}
+
+	private class TerminatingFatalErrorHandler implements FatalErrorHandler {
+
+		private final int index;
+
+		private TerminatingFatalErrorHandler(int index) {
+			this.index = index;
+		}
+
+		@Override
+		public void onFatalError(Throwable exception) {
+			LOG.error("TaskManager #{} failed.", index, exception);
+
+			try {
+				synchronized (lock) {
+					// note: if not running (after shutdown) taskManagers may be null!
+					if (running && taskManagers[index] != null) {
+						taskManagers[index].shutDown();
+					}
+				}
+			} catch (Exception e) {
+				LOG.error("TaskManager #{} could not be properly terminated.", index, e);
+			}
+		}
 	}
 }

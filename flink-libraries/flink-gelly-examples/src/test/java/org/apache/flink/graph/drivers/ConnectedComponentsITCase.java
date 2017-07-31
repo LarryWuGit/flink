@@ -19,16 +19,29 @@
 package org.apache.flink.graph.drivers;
 
 import org.apache.flink.client.program.ProgramParametrizationException;
+import org.apache.flink.graph.asm.dataset.ChecksumHashCode.Checksum;
+
+import org.junit.Assume;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.junit.runners.Parameterized;
 
+/**
+ * Tests for {@link ConnectedComponents}.
+ */
 @RunWith(Parameterized.class)
-public class ConnectedComponentsITCase
-extends DriverBaseITCase {
+public class ConnectedComponentsITCase extends NonTransformableDriverBaseITCase {
 
-	public ConnectedComponentsITCase(TestExecutionMode mode) {
-		super(mode);
+	public ConnectedComponentsITCase(String idType, TestExecutionMode mode) {
+		super(idType, mode);
+	}
+
+	private String[] parameters(int scale, String output) {
+		return new String[] {
+			"--algorithm", "ConnectedComponents",
+			"--input", "RMatGraph", "--scale", Integer.toString(scale), "--type", idType, "--simplify", "undirected",
+				"--edge_factor", "1", "--a", "0.25", "--b", "0.25", "--c", "0.25", "--noise_enabled", "--noise", "1.0",
+			"--output", output};
 	}
 
 	@Test
@@ -42,24 +55,15 @@ extends DriverBaseITCase {
 	}
 
 	@Test
-	public void testHashWithRMatIntegerGraph() throws Exception {
-		String expected = "\\nChecksumHashCode 0x0000000000cdc7e7, count 838\\n";
-
-		expectedOutput(
-			new String[]{"--algorithm", "ConnectedComponents",
-				"--input", "RMatGraph", "--type", "integer", "--simplify", "undirected", "--edge_factor", "1",
-					"--a", "0.25", "--b", "0.25", "--c", "0.25", "--noise_enabled", "--noise", "1.0",
-				"--output", "hash"},
-			expected);
+	public void testHashWithRMatGraph() throws Exception {
+		expectedChecksum(parameters(7, "hash"), 106, 0x0000000000033e88L);
 	}
 
 	@Test
-	public void testPrintWithRMatIntegerGraph() throws Exception {
-		expectedCount(
-			new String[]{"--algorithm", "ConnectedComponents",
-				"--input", "RMatGraph", "--type", "integer", "--simplify", "undirected", "--edge_factor", "1",
-					"--a", "0.25", "--b", "0.25", "--c", "0.25", "--noise_enabled", "--noise", "1.0",
-				"--output", "print"},
-			838);
+	public void testPrintWithRMatGraph() throws Exception {
+		// skip 'char' since it is not printed as a number
+		Assume.assumeFalse(idType.equals("char") || idType.equals("nativeChar"));
+
+		expectedOutputChecksum(parameters(7, "print"), new Checksum(106, 0x00000024edd0568dL));
 	}
 }

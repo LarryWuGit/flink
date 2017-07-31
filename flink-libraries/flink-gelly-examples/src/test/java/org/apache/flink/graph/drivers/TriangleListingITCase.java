@@ -19,16 +19,35 @@
 package org.apache.flink.graph.drivers;
 
 import org.apache.flink.client.program.ProgramParametrizationException;
+import org.apache.flink.graph.asm.dataset.ChecksumHashCode.Checksum;
+
+import org.apache.commons.lang3.ArrayUtils;
+import org.junit.Assume;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.junit.runners.Parameterized;
 
+/**
+ * Tests for {@link TriangleListing}.
+ */
 @RunWith(Parameterized.class)
-public class TriangleListingITCase
-extends DriverBaseITCase {
+public class TriangleListingITCase extends CopyableValueDriverBaseITCase {
 
-	public TriangleListingITCase(TestExecutionMode mode) {
-		super(mode);
+	public TriangleListingITCase(String idType, TestExecutionMode mode) {
+		super(idType, mode);
+	}
+
+	private String[] parameters(int scale, String order, String output) {
+		String[] parameters =  new String[] {
+			"--algorithm", "TriangleListing", "--order", order, "--permute_results",
+			"--input", "RMatGraph", "--scale", Integer.toString(scale), "--type", idType, "--simplify", order,
+			"--output", output};
+
+		if (output.equals("hash")) {
+			return ArrayUtils.addAll(parameters, "--sort_triangle_vertices", "--triadic_census");
+		} else {
+			return parameters;
+		}
 	}
 
 	@Test
@@ -42,66 +61,56 @@ extends DriverBaseITCase {
 	}
 
 	@Test
-	public void testDirectedHashWithRMatIntegerGraph() throws Exception {
+	public void testHashWithDirectedRMatGraph() throws Exception {
 		String expected = "\n" +
-			"ChecksumHashCode 0x0000001beffe6edd, count 75049\n" +
+			new Checksum(61410, 0x000077d3e5e69fa3L) + "\n\n" +
 			"Triadic census:\n" +
-			"  003: 113,435,893\n" +
-			"  012: 6,632,528\n" +
-			"  102: 983,535\n" +
-			"  021d: 118,574\n" +
-			"  021u: 118,566\n" +
-			"  021c: 237,767\n" +
-			"  111d: 129,773\n" +
-			"  111u: 130,041\n" +
-			"  030t: 16,981\n" +
-			"  030c: 5,535\n" +
-			"  201: 43,574\n" +
-			"  120d: 7,449\n" +
-			"  120u: 7,587\n" +
-			"  120c: 15,178\n" +
-			"  210: 17,368\n" +
-			"  300: 4,951\n";
+			"  003: 1,679,209\n" +
+			"  012: 267,130\n" +
+			"  102: 57,972\n" +
+			"  021d: 8,496\n" +
+			"  021u: 8,847\n" +
+			"  021c: 17,501\n" +
+			"  111d: 13,223\n" +
+			"  111u: 12,865\n" +
+			"  030t: 1,674\n" +
+			"  030c: 572\n" +
+			"  201: 5,678\n" +
+			"  120d: 1,066\n" +
+			"  120u: 896\n" +
+			"  120c: 2,011\n" +
+			"  210: 2,867\n" +
+			"  300: 1,149\n";
 
-		expectedOutput(
-			new String[]{"--algorithm", "TriangleListing", "--order", "directed", "--sort_triangle_vertices", "--triadic_census",
-				"--input", "RMatGraph", "--type", "integer", "--simplify", "directed",
-				"--output", "hash"},
-			expected);
+		expectedOutput(parameters(8, "directed", "hash"), expected);
 	}
 
 	@Test
-	public void testDirectedPrintWithRMatIntegerGraph() throws Exception {
-		expectedCount(
-			new String[]{"--algorithm", "TriangleListing", "--order", "directed",
-				"--input", "RMatGraph", "--type", "integer", "--simplify", "directed",
-				"--output", "print"},
-			75049);
-	}
-
-	@Test
-	public void testUndirectedHashWithRMatIntegerGraph() throws Exception {
+	public void testHashWithUndirectedRMatGraph() throws Exception {
 		String expected = "\n" +
-			"ChecksumHashCode 0x00000000e6b3f32c, count 75049\n" +
+			new Checksum(61410, 0x000077ea1798a4e0L) + "\n\n" +
 			"Triadic census:\n" +
-			"  03: 113,435,893\n" +
-			"  12: 7,616,063\n" +
-			"  21: 778,295\n" +
-			"  30: 75,049\n";
+			"  03: 1,679,209\n" +
+			"  12: 325,102\n" +
+			"  21: 66,610\n" +
+			"  30: 10,235\n";
 
-		expectedOutput(
-			new String[]{"--algorithm", "TriangleListing", "--order", "undirected", "--sort_triangle_vertices", "--triadic_census",
-				"--input", "RMatGraph", "--type", "integer", "--simplify", "undirected",
-				"--output", "hash"},
-			expected);
+		expectedOutput(parameters(8, "undirected", "hash"), expected);
 	}
 
 	@Test
-	public void testUndirectedPrintWithRMatIntegerGraph() throws Exception {
-		expectedCount(
-			new String[]{"--algorithm", "TriangleListing", "--order", "undirected",
-				"--input", "RMatGraph", "--type", "integer", "--simplify", "undirected",
-				"--output", "print"},
-			75049);
+	public void testPrintWithDirectedRMatGraph() throws Exception {
+		// skip 'char' since it is not printed as a number
+		Assume.assumeFalse(idType.equals("char") || idType.equals("nativeChar"));
+
+		expectedOutputChecksum(parameters(8, "directed", "print"), new Checksum(61410, 0x000077d967722c8aL));
+	}
+
+	@Test
+	public void testPrintWithUndirectedRMatGraph() throws Exception {
+		// skip 'char' since it is not printed as a number
+		Assume.assumeFalse(idType.equals("char") || idType.equals("nativeChar"));
+
+		expectedOutputChecksum(parameters(8, "undirected", "print"), new Checksum(61410, 0x0000780ffcb6838eL));
 	}
 }

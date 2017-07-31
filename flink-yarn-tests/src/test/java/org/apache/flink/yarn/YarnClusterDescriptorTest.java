@@ -15,11 +15,14 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 package org.apache.flink.yarn;
 
 import org.apache.flink.configuration.ConfigConstants;
 import org.apache.flink.configuration.Configuration;
 import org.apache.flink.test.util.TestBaseUtils;
+import org.apache.flink.util.TestLogger;
+
 import org.apache.hadoop.fs.Path;
 import org.junit.Assert;
 import org.junit.Rule;
@@ -34,22 +37,21 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
-public class YarnClusterDescriptorTest {
+/**
+ * Tests for the YarnClusterDescriptor.
+ */
+public class YarnClusterDescriptorTest extends TestLogger {
 
 	@Rule
 	public TemporaryFolder temporaryFolder = new TemporaryFolder();
 
 	/**
-	 * Tests to ship a lib folder through the {@code YarnClusterDescriptor.addShipFiles}
+	 * Tests to ship a lib folder through the {@code YarnClusterDescriptor.addShipFiles}.
 	 */
 	@Test
 	public void testExplicitLibShipping() throws Exception {
-		AbstractYarnClusterDescriptor descriptor = new YarnClusterDescriptor();
+		AbstractYarnClusterDescriptor descriptor = new YarnClusterDescriptor(new Configuration(), temporaryFolder.getRoot().getAbsolutePath());
 		descriptor.setLocalJarPath(new Path("/path/to/flink.jar"));
-
-		descriptor.setConfigurationDirectory(temporaryFolder.getRoot().getAbsolutePath());
-		descriptor.setConfigurationFilePath(new Path(temporaryFolder.getRoot().getPath()));
-		descriptor.setFlinkConfiguration(new Configuration());
 
 		File libFile = temporaryFolder.newFile("libFile.jar");
 		File libFolder = temporaryFolder.newFolder().getAbsoluteFile();
@@ -77,15 +79,11 @@ public class YarnClusterDescriptorTest {
 	}
 
 	/**
-	 * Tests to ship a lib folder through the {@code ConfigConstants.ENV_FLINK_LIB_DIR}
+	 * Tests to ship a lib folder through the {@code ConfigConstants.ENV_FLINK_LIB_DIR}.
 	 */
 	@Test
 	public void testEnvironmentLibShipping() throws Exception {
-		AbstractYarnClusterDescriptor descriptor = new YarnClusterDescriptor();
-
-		descriptor.setConfigurationDirectory(temporaryFolder.getRoot().getAbsolutePath());
-		descriptor.setConfigurationFilePath(new Path(temporaryFolder.getRoot().getPath()));
-		descriptor.setFlinkConfiguration(new Configuration());
+		AbstractYarnClusterDescriptor descriptor = new YarnClusterDescriptor(new Configuration(), temporaryFolder.getRoot().getAbsolutePath());
 
 		File libFolder = temporaryFolder.newFolder().getAbsoluteFile();
 		File libFile = new File(libFolder, "libFile.jar");

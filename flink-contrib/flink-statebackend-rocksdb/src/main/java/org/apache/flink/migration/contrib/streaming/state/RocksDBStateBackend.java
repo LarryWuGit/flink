@@ -68,6 +68,12 @@ public class RocksDBStateBackend extends AbstractStateBackend {
 		}
 	}
 
+	/**
+	 * This class exists to provide a good error message if a user attempts to restore from a semi async snapshot.
+	 *
+	 * <p>see FLINK-5468
+	 */
+	@Deprecated
 	public static class FinalSemiAsyncSnapshot {
 
 		static {

@@ -18,6 +18,7 @@
 
 package org.apache.flink.runtime.minicluster
 
+import java.net.URL
 import java.util.UUID
 import java.util.concurrent.{Executors, TimeUnit}
 
@@ -25,20 +26,22 @@ import akka.pattern.Patterns.gracefulStop
 import akka.pattern.ask
 import akka.actor.{ActorRef, ActorSystem}
 import com.typesafe.config.Config
-
 import org.apache.flink.api.common.{JobExecutionResult, JobID, JobSubmissionResult}
-import org.apache.flink.configuration.{ConfigConstants, Configuration}
+import org.apache.flink.configuration.{AkkaOptions, ConfigConstants, Configuration, JobManagerOptions, TaskManagerOptions}
+import org.apache.flink.core.fs.Path
 import org.apache.flink.runtime.akka.AkkaUtils
 import org.apache.flink.runtime.client.{JobClient, JobExecutionException}
 import org.apache.flink.runtime.concurrent.{Executors => FlinkExecutors}
+import org.apache.flink.runtime.execution.librarycache.FlinkUserCodeClassLoader
+import org.apache.flink.runtime.highavailability.{HighAvailabilityServices, HighAvailabilityServicesUtils}
 import org.apache.flink.runtime.instance.{ActorGateway, AkkaActorGateway}
 import org.apache.flink.runtime.jobgraph.JobGraph
 import org.apache.flink.runtime.jobmanager.HighAvailabilityMode
-import org.apache.flink.runtime.leaderretrieval.{LeaderRetrievalListener, LeaderRetrievalService, StandaloneLeaderRetrievalService}
+import org.apache.flink.runtime.leaderretrieval.{LeaderRetrievalListener, LeaderRetrievalService}
 import org.apache.flink.runtime.messages.TaskManagerMessages.NotifyWhenRegisteredAtJobManager
-import org.apache.flink.runtime.util.{ExecutorThreadFactory, Hardware, ZooKeeperUtils}
+import org.apache.flink.runtime.util.{ExecutorThreadFactory, Hardware}
 import org.apache.flink.runtime.webmonitor.{WebMonitor, WebMonitorUtils}
-
+import org.apache.flink.util.NetUtils
 import org.slf4j.LoggerFactory
 
 import scala.concurrent.duration.{Duration, FiniteDuration}
@@ -56,6 +59,7 @@ import scala.concurrent._
  */
 abstract class FlinkMiniCluster(
     val userConfiguration: Configuration,
+    val highAvailabilityServices: HighAvailabilityServices,
     val useSingleActorSystem: Boolean)
   extends LeaderRetrievalListener {
 
@@ -68,7 +72,7 @@ abstract class FlinkMiniCluster(
   // NOTE: THIS MUST BE getByName("localhost"), which is 127.0.0.1 and
   // not getLocalHost(), which may be 127.0.1.1
   val hostname = userConfiguration.getString(
-    ConfigConstants.JOB_MANAGER_IPC_ADDRESS_KEY,
+    JobManagerOptions.ADDRESS,
     "localhost")
 
   protected val originalConfiguration = generateConfiguration(userConfiguration)
@@ -115,15 +119,22 @@ abstract class FlinkMiniCluster(
     Hardware.getNumberCPUCores(),
     new ExecutorThreadFactory("mini-cluster-io"))
 
+  def this(configuration: Configuration, useSingleActorSystem: Boolean) {
+    this(
+      configuration,
+      HighAvailabilityServicesUtils.createAvailableOrEmbeddedServices(
+        configuration,
+        ExecutionContext.global),
+      useSingleActorSystem)
+  }
+
   def configuration: Configuration = {
-    if (originalConfiguration.getInteger(
-      ConfigConstants.JOB_MANAGER_IPC_PORT_KEY,
-      ConfigConstants.DEFAULT_JOB_MANAGER_IPC_PORT) == 0) {
+    if (originalConfiguration.getInteger(JobManagerOptions.PORT) == 0) {
       val leaderConfiguration = new Configuration(originalConfiguration)
 
       val leaderPort = getLeaderRPCPort
 
-      leaderConfiguration.setInteger(ConfigConstants.JOB_MANAGER_IPC_PORT_KEY, leaderPort)
+      leaderConfiguration.setInteger(JobManagerOptions.PORT, leaderPort)
 
       leaderConfiguration
     } else {
@@ -148,25 +159,17 @@ abstract class FlinkMiniCluster(
   // --------------------------------------------------------------------------
 
   def getNumberOfJobManagers: Int = {
-    if(haMode == HighAvailabilityMode.NONE) {
-      1
-    } else {
-      originalConfiguration.getInteger(
-        ConfigConstants.LOCAL_NUMBER_JOB_MANAGER,
-        ConfigConstants.DEFAULT_LOCAL_NUMBER_JOB_MANAGER
-      )
-    }
+    originalConfiguration.getInteger(
+      ConfigConstants.LOCAL_NUMBER_JOB_MANAGER,
+      ConfigConstants.DEFAULT_LOCAL_NUMBER_JOB_MANAGER
+    )
   }
 
   def getNumberOfResourceManagers: Int = {
-    if(haMode == HighAvailabilityMode.NONE) {
-      1
-    } else {
-      originalConfiguration.getInteger(
-        ConfigConstants.LOCAL_NUMBER_RESOURCE_MANAGER,
-        ConfigConstants.DEFAULT_LOCAL_NUMBER_RESOURCE_MANAGER
-      )
-    }
+    originalConfiguration.getInteger(
+      ConfigConstants.LOCAL_NUMBER_RESOURCE_MANAGER,
+      ConfigConstants.DEFAULT_LOCAL_NUMBER_RESOURCE_MANAGER
+    )
   }
 
   def getJobManagersAsJava = {
@@ -236,8 +239,7 @@ abstract class FlinkMiniCluster(
       AkkaUtils.getAkkaConfig(originalConfiguration, None)
     }
     else {
-      val port = originalConfiguration.getInteger(ConfigConstants.JOB_MANAGER_IPC_PORT_KEY,
-                                                  ConfigConstants.DEFAULT_JOB_MANAGER_IPC_PORT)
+      val port = originalConfiguration.getInteger(JobManagerOptions.PORT)
 
       val resolvedPort = if(port != 0) port + index else port
 
@@ -246,10 +248,14 @@ abstract class FlinkMiniCluster(
   }
 
   def getTaskManagerAkkaConfig(index: Int): Config = {
-    val port = originalConfiguration.getInteger(ConfigConstants.TASK_MANAGER_IPC_PORT_KEY,
-                                                ConfigConstants.DEFAULT_TASK_MANAGER_IPC_PORT)
+    val portRange = originalConfiguration.getString(TaskManagerOptions.RPC_PORT)
 
-    val resolvedPort = if(port != 0) port + index else port
+    val portRangeIterator = NetUtils.getPortRangeFromString(portRange)
+
+    val resolvedPort = if (portRangeIterator.hasNext) {
+      val port = portRangeIterator.next()
+      if (port > 0) port + index else 0
+    } else 0
 
     AkkaUtils.getAkkaConfig(originalConfiguration, Some((hostname, resolvedPort)))
   }
@@ -261,9 +267,9 @@ abstract class FlinkMiniCluster(
     // https://docs.travis-ci.com/user/environment-variables#Default-Environment-Variables
     if (sys.env.contains("CI")) {
       // Only set if nothing specified in config
-      if (config.getString(ConfigConstants.AKKA_ASK_TIMEOUT, null) == null) {
-        val duration = Duration(ConfigConstants.DEFAULT_AKKA_ASK_TIMEOUT) * 10
-        config.setString(ConfigConstants.AKKA_ASK_TIMEOUT, s"${duration.toSeconds}s")
+      if (!config.contains(AkkaOptions.ASK_TIMEOUT)) {
+        val duration = Duration(AkkaOptions.ASK_TIMEOUT.defaultValue()) * 10
+        config.setString(AkkaOptions.ASK_TIMEOUT, s"${duration.toSeconds}s")
 
         LOG.info(s"Akka ask timeout set to ${duration.toSeconds}s")
       }
@@ -301,7 +307,7 @@ abstract class FlinkMiniCluster(
           "The FlinkMiniCluster has not been started yet.")
       }
     } else {
-      JobClient.startJobClientActorSystem(originalConfiguration)
+      JobClient.startJobClientActorSystem(originalConfiguration, hostname)
     }
   }
 
@@ -327,10 +333,11 @@ abstract class FlinkMiniCluster(
     jobManagerActorSystems = Some(jmActorSystems)
     jobManagerActors = Some(jmActors)
 
-    // start leader retrieval service
-    val lrs = createLeaderRetrievalService()
-    jobManagerLeaderRetrievalService = Some(lrs)
-    lrs.start(this)
+    // find out which job manager the leader is
+    jobManagerLeaderRetrievalService = Option(highAvailabilityServices.getJobManagerLeaderRetriever(
+      HighAvailabilityServices.DEFAULT_JOB_ID))
+
+    jobManagerLeaderRetrievalService.foreach(_.start(this))
 
     // start as many resource managers as job managers
     val (rmActorSystems, rmActors) =
@@ -380,10 +387,7 @@ abstract class FlinkMiniCluster(
     : Option[WebMonitor] = {
     if(
       config.getBoolean(ConfigConstants.LOCAL_START_WEBSERVER, false) &&
-        config.getInteger(ConfigConstants.JOB_MANAGER_WEB_PORT_KEY, 0) >= 0) {
-
-      // TODO: Add support for HA: Make web server work independently from the JM
-      val leaderRetrievalService = new StandaloneLeaderRetrievalService(jobManagerAkkaURL)
+        config.getInteger(JobManagerOptions.WEB_PORT.key(), 0) >= 0) {
 
       LOG.info("Starting JobManger web frontend")
       // start the new web frontend. we need to load this dynamically
@@ -391,7 +395,7 @@ abstract class FlinkMiniCluster(
       val webServer = Option(
         WebMonitorUtils.startWebRuntimeMonitor(
           config,
-          leaderRetrievalService,
+          highAvailabilityServices,
           actorSystem)
       )
 
@@ -409,6 +413,9 @@ abstract class FlinkMiniCluster(
     awaitTermination()
 
     jobManagerLeaderRetrievalService.foreach(_.stop())
+
+    highAvailabilityServices.closeAndCleanupAllData()
+
     isRunning = false
 
     FlinkExecutors.gracefulShutdown(
@@ -509,33 +516,37 @@ abstract class FlinkMiniCluster(
     submitJobAndWait(jobGraph, printUpdates, timeout)
   }
 
-  def submitJobAndWait(
-    jobGraph: JobGraph,
-    printUpdates: Boolean,
-    timeout: FiniteDuration)
-  : JobExecutionResult = {
-    submitJobAndWait(jobGraph, printUpdates, timeout, createLeaderRetrievalService())
-  }
-
   @throws(classOf[JobExecutionException])
   def submitJobAndWait(
       jobGraph: JobGraph,
       printUpdates: Boolean,
-      timeout: FiniteDuration,
-      leaderRetrievalService: LeaderRetrievalService)
+      timeout: FiniteDuration)
     : JobExecutionResult = {
 
     val clientActorSystem = startJobClientActorSystem(jobGraph.getJobID)
 
-     try {
-     JobClient.submitJobAndWait(
+    val userCodeClassLoader =
+      try {
+        createUserCodeClassLoader(
+          jobGraph.getUserJars,
+          jobGraph.getClasspaths,
+          Thread.currentThread().getContextClassLoader)
+      } catch {
+        case e: Exception => throw new JobExecutionException(
+          jobGraph.getJobID,
+          "Could not create the user code class loader.",
+          e)
+      }
+
+    try {
+      JobClient.submitJobAndWait(
        clientActorSystem,
        configuration,
-       leaderRetrievalService,
+       highAvailabilityServices,
        jobGraph,
        timeout,
        printUpdates,
-       this.getClass.getClassLoader())
+       userCodeClassLoader)
     } finally {
        if(!useSingleActorSystem) {
          // we have to shutdown the just created actor system
@@ -558,11 +569,24 @@ abstract class FlinkMiniCluster(
         )
     }
 
+    val userCodeClassLoader =
+      try {
+        createUserCodeClassLoader(
+          jobGraph.getUserJars,
+          jobGraph.getClasspaths,
+          Thread.currentThread().getContextClassLoader)
+      } catch {
+        case e: Exception => throw new JobExecutionException(
+          jobGraph.getJobID,
+          "Could not create the user code class loader.",
+          e)
+      }
+
     JobClient.submitJobDetached(jobManagerGateway,
       configuration,
       jobGraph,
       timeout,
-      this.getClass.getClassLoader())
+      userCodeClassLoader)
 
     new JobSubmissionResult(jobGraph.getJobID)
   }
@@ -570,20 +594,6 @@ abstract class FlinkMiniCluster(
   def shutdownJobClientActorSystem(actorSystem: ActorSystem): Unit = {
     if(!useSingleActorSystem) {
       actorSystem.shutdown()
-    }
-  }
-
-  protected def createLeaderRetrievalService(): LeaderRetrievalService = {
-    (jobManagerActorSystems, jobManagerActors) match {
-      case (Some(jmActorSystems), Some(jmActors)) =>
-        if (haMode == HighAvailabilityMode.NONE) {
-          new StandaloneLeaderRetrievalService(
-            AkkaUtils.getAkkaURL(jmActorSystems(0), jmActors(0)))
-        } else {
-          ZooKeeperUtils.createLeaderRetrievalService(originalConfiguration)
-        }
-
-      case _ => throw new Exception("The FlinkMiniCluster has not been started properly.")
     }
   }
 
@@ -642,5 +652,29 @@ abstract class FlinkMiniCluster(
         leaderIndex.failure(exception)
       }
     }
+  }
+
+  private def createUserCodeClassLoader(
+      jars: java.util.List[Path],
+      classPaths: java.util.List[URL],
+      parentClassLoader: ClassLoader): FlinkUserCodeClassLoader = {
+
+    val urls = new Array[URL](jars.size() + classPaths.size())
+
+    import scala.collection.JavaConverters._
+
+    var counter = 0
+
+    for (path <- jars.asScala) {
+      urls(counter) = path.makeQualified(path.getFileSystem).toUri.toURL
+      counter += 1
+    }
+
+    for (classPath <- classPaths.asScala) {
+      urls(counter) = classPath
+      counter += 1
+    }
+
+    new FlinkUserCodeClassLoader(urls, parentClassLoader)
   }
 }

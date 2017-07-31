@@ -24,13 +24,17 @@ import org.apache.calcite.rel.core.Calc
 import org.apache.calcite.rel.metadata.RelMetadataQuery
 import org.apache.calcite.rel.{RelNode, RelWriter}
 import org.apache.calcite.rex.RexProgram
-import org.apache.flink.api.common.functions.FlatMapFunction
 import org.apache.flink.streaming.api.datastream.DataStream
-import org.apache.flink.table.api.StreamTableEnvironment
-import org.apache.flink.table.calcite.FlinkTypeFactory
-import org.apache.flink.table.codegen.CodeGenerator
+import org.apache.flink.streaming.api.functions.ProcessFunction
+import org.apache.flink.table.api.{StreamQueryConfig, StreamTableEnvironment}
+import org.apache.flink.table.codegen.FunctionCodeGenerator
+import org.apache.flink.table.calcite.{FlinkTypeFactory, RelTimeIndicatorConverter}
 import org.apache.flink.table.plan.nodes.CommonCalc
-import org.apache.flink.types.Row
+import org.apache.flink.table.plan.schema.RowSchema
+import org.apache.flink.table.runtime.CRowProcessRunner
+import org.apache.flink.table.runtime.types.{CRow, CRowTypeInfo}
+
+import scala.collection.JavaConverters._
 
 /**
   * Flink RelNode which matches along with FlatMapOperator.
@@ -40,17 +44,25 @@ class DataStreamCalc(
     cluster: RelOptCluster,
     traitSet: RelTraitSet,
     input: RelNode,
-    rowRelDataType: RelDataType,
+    inputSchema: RowSchema,
+    schema: RowSchema,
     calcProgram: RexProgram,
     ruleDescription: String)
   extends Calc(cluster, traitSet, input, calcProgram)
   with CommonCalc
   with DataStreamRel {
 
-  override def deriveRowType(): RelDataType = rowRelDataType
+  override def deriveRowType(): RelDataType = schema.logicalType
 
   override def copy(traitSet: RelTraitSet, child: RelNode, program: RexProgram): Calc = {
-    new DataStreamCalc(cluster, traitSet, child, getRowType, program, ruleDescription)
+    new DataStreamCalc(
+      cluster,
+      traitSet,
+      child,
+      inputSchema,
+      schema,
+      program,
+      ruleDescription)
   }
 
   override def toString: String = calcToString(calcProgram, getExpressionString)
@@ -75,28 +87,57 @@ class DataStreamCalc(
     estimateRowCount(calcProgram, rowCnt)
   }
 
-  override def translateToPlan(tableEnv: StreamTableEnvironment): DataStream[Row] = {
+  override def translateToPlan(
+      tableEnv: StreamTableEnvironment,
+      queryConfig: StreamQueryConfig): DataStream[CRow] = {
 
     val config = tableEnv.getConfig
 
-    val inputDataStream = getInput.asInstanceOf[DataStreamRel].translateToPlan(tableEnv)
+    val inputDataStream =
+      getInput.asInstanceOf[DataStreamRel].translateToPlan(tableEnv, queryConfig)
 
-    val generator = new CodeGenerator(config, false, inputDataStream.getType)
+    // materialize time attributes in condition
+    val condition = if (calcProgram.getCondition != null) {
+      val materializedCondition = RelTimeIndicatorConverter.convertExpression(
+        calcProgram.expandLocalRef(calcProgram.getCondition),
+        inputSchema.logicalType,
+        cluster.getRexBuilder)
+      Some(materializedCondition)
+    } else {
+      None
+    }
 
-    val body = functionBody(
+    // filter out time attributes
+    val projection = calcProgram.getProjectList.asScala
+      .map(calcProgram.expandLocalRef)
+      // time indicator fields must not be part of the code generation
+      .filter(expr => !FlinkTypeFactory.isTimeIndicatorType(expr.getType))
+      // update indices
+      .map(expr => inputSchema.mapRexNode(expr))
+
+    val generator = new FunctionCodeGenerator(config, false, inputSchema.physicalTypeInfo)
+
+    val genFunction = generateFunction(
       generator,
-      inputDataStream.getType,
-      getRowType,
-      calcProgram,
-      config)
-
-    val genFunction = generator.generateFunction(
       ruleDescription,
-      classOf[FlatMapFunction[Row, Row]],
-      body,
-      FlinkTypeFactory.toInternalRowTypeInfo(getRowType))
+      inputSchema,
+      schema,
+      projection,
+      condition,
+      config,
+      classOf[ProcessFunction[CRow, CRow]])
 
-    val mapFunc = calcMapFunction(genFunction)
-    inputDataStream.flatMap(mapFunc).name(calcOpName(calcProgram, getExpressionString))
+    val inputParallelism = inputDataStream.getParallelism
+
+    val processFunc = new CRowProcessRunner(
+      genFunction.name,
+      genFunction.code,
+      CRowTypeInfo(schema.physicalTypeInfo))
+
+    inputDataStream
+      .process(processFunc)
+      .name(calcOpName(calcProgram, getExpressionString))
+      // keep parallelism to ensure order of accumulate and retract messages
+      .setParallelism(inputParallelism)
   }
 }

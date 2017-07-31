@@ -18,24 +18,25 @@
 
 package org.apache.flink.streaming.connectors.kafka.internals;
 
-import kafka.api.OffsetRequest;
-import kafka.common.TopicAndPartition;
 import org.apache.flink.api.common.functions.RuntimeContext;
 import org.apache.flink.metrics.MetricGroup;
-import org.apache.flink.streaming.connectors.kafka.config.StartupMode;
-import org.apache.kafka.clients.consumer.ConsumerConfig;
-import org.apache.kafka.common.Node;
-
 import org.apache.flink.streaming.api.functions.AssignerWithPeriodicWatermarks;
 import org.apache.flink.streaming.api.functions.AssignerWithPunctuatedWatermarks;
 import org.apache.flink.streaming.api.functions.source.SourceFunction.SourceContext;
 import org.apache.flink.streaming.api.operators.StreamingRuntimeContext;
+import org.apache.flink.streaming.connectors.kafka.config.StartupMode;
 import org.apache.flink.streaming.util.serialization.KeyedDeserializationSchema;
 import org.apache.flink.util.InstantiationUtil;
 import org.apache.flink.util.SerializedValue;
 
+import kafka.api.OffsetRequest;
+import kafka.common.TopicAndPartition;
+import org.apache.kafka.clients.consumer.ConsumerConfig;
+import org.apache.kafka.common.Node;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+
+import javax.annotation.Nonnull;
 
 import java.io.IOException;
 import java.util.ArrayList;
@@ -56,53 +57,48 @@ import static org.apache.flink.util.Preconditions.checkNotNull;
  * @param <T> The type of elements produced by the fetcher.
  */
 public class Kafka08Fetcher<T> extends AbstractFetcher<T, TopicAndPartition> {
-	
-	static final KafkaTopicPartitionState<TopicAndPartition> MARKER = 
+
+	static final KafkaTopicPartitionState<TopicAndPartition> MARKER =
 			new KafkaTopicPartitionState<>(new KafkaTopicPartition("n/a", -1), new TopicAndPartition("n/a", -1));
 
 	private static final Logger LOG = LoggerFactory.getLogger(Kafka08Fetcher.class);
 
 	// ------------------------------------------------------------------------
 
-	/** The schema to convert between Kafka's byte messages, and Flink's objects */
+	/** The schema to convert between Kafka's byte messages, and Flink's objects. */
 	private final KeyedDeserializationSchema<T> deserializer;
 
-	/** The properties that configure the Kafka connection */
+	/** The properties that configure the Kafka connection. */
 	private final Properties kafkaConfig;
 
-	/** The subtask's runtime context */
+	/** The subtask's runtime context. */
 	private final RuntimeContext runtimeContext;
 
-	/** The queue of partitions that are currently not assigned to a broker connection */
-	private final ClosableBlockingQueue<KafkaTopicPartitionState<TopicAndPartition>> unassignedPartitionsQueue;
-
-	/** The behavior to use in case that an offset is not valid (any more) for a partition */
+	/** The behavior to use in case that an offset is not valid (any more) for a partition. */
 	private final long invalidOffsetBehavior;
 
-	/** The interval in which to automatically commit (-1 if deactivated) */
+	/** The interval in which to automatically commit (-1 if deactivated). */
 	private final long autoCommitInterval;
 
-	/** The handler that reads/writes offsets from/to ZooKeeper */
+	/** The handler that reads/writes offsets from/to ZooKeeper. */
 	private volatile ZookeeperOffsetHandler zookeeperOffsetHandler;
 
-	/** Flag to track the main work loop as alive */
+	/** Flag to track the main work loop as alive. */
 	private volatile boolean running = true;
-
 
 	public Kafka08Fetcher(
 			SourceContext<T> sourceContext,
-			Map<KafkaTopicPartition, Long> assignedPartitionsWithInitialOffsets,
+			Map<KafkaTopicPartition, Long> seedPartitionsWithInitialOffsets,
 			SerializedValue<AssignerWithPeriodicWatermarks<T>> watermarksPeriodic,
 			SerializedValue<AssignerWithPunctuatedWatermarks<T>> watermarksPunctuated,
 			StreamingRuntimeContext runtimeContext,
 			KeyedDeserializationSchema<T> deserializer,
 			Properties kafkaProperties,
 			long autoCommitInterval,
-			boolean useMetrics) throws Exception
-	{
+			boolean useMetrics) throws Exception {
 		super(
 				sourceContext,
-				assignedPartitionsWithInitialOffsets,
+				seedPartitionsWithInitialOffsets,
 				watermarksPeriodic,
 				watermarksPunctuated,
 				runtimeContext.getProcessingTimeService(),
@@ -115,12 +111,6 @@ public class Kafka08Fetcher<T> extends AbstractFetcher<T, TopicAndPartition> {
 		this.runtimeContext = runtimeContext;
 		this.invalidOffsetBehavior = getInvalidOffsetBehavior(kafkaProperties);
 		this.autoCommitInterval = autoCommitInterval;
-		this.unassignedPartitionsQueue = new ClosableBlockingQueue<>();
-
-		// initially, all these partitions are not assigned to a specific broker connection
-		for (KafkaTopicPartitionState<TopicAndPartition> partition : subscribedPartitionStates()) {
-			unassignedPartitionsQueue.add(partition);
-		}
 	}
 
 	// ------------------------------------------------------------------------
@@ -175,8 +165,11 @@ public class Kafka08Fetcher<T> extends AbstractFetcher<T, TopicAndPartition> {
 			if (autoCommitInterval > 0) {
 				LOG.info("Starting periodic offset committer, with commit interval of {}ms", autoCommitInterval);
 
-				periodicCommitter = new PeriodicOffsetCommitter(zookeeperOffsetHandler, 
-						subscribedPartitionStates(), errorHandler, autoCommitInterval);
+				periodicCommitter = new PeriodicOffsetCommitter(
+						zookeeperOffsetHandler,
+						subscribedPartitionStates(),
+						errorHandler,
+						autoCommitInterval);
 				periodicCommitter.setName("Periodic Kafka partition offset committer");
 				periodicCommitter.setDaemon(true);
 				periodicCommitter.start();
@@ -196,19 +189,18 @@ public class Kafka08Fetcher<T> extends AbstractFetcher<T, TopicAndPartition> {
 				// wait for max 5 seconds trying to get partitions to assign
 				// if threads shut down, this poll returns earlier, because the threads inject the
 				// special marker into the queue
-				List<KafkaTopicPartitionState<TopicAndPartition>> partitionsToAssign = 
+				List<KafkaTopicPartitionState<TopicAndPartition>> partitionsToAssign =
 						unassignedPartitionsQueue.getBatchBlocking(5000);
 				partitionsToAssign.remove(MARKER);
 
 				if (!partitionsToAssign.isEmpty()) {
 					LOG.info("Assigning {} partitions to broker threads", partitionsToAssign.size());
-					Map<Node, List<KafkaTopicPartitionState<TopicAndPartition>>> partitionsWithLeaders = 
+					Map<Node, List<KafkaTopicPartitionState<TopicAndPartition>>> partitionsWithLeaders =
 							findLeaderForPartitions(partitionsToAssign, kafkaConfig);
 
 					// assign the partitions to the leaders (maybe start the threads)
-					for (Map.Entry<Node, List<KafkaTopicPartitionState<TopicAndPartition>>> partitionsWithLeader : 
-							partitionsWithLeaders.entrySet())
-					{
+					for (Map.Entry<Node, List<KafkaTopicPartitionState<TopicAndPartition>>> partitionsWithLeader :
+							partitionsWithLeaders.entrySet()) {
 						final Node leader = partitionsWithLeader.getKey();
 						final List<KafkaTopicPartitionState<TopicAndPartition>> partitions = partitionsWithLeader.getValue();
 						SimpleConsumerThread<T> brokerThread = brokerToThread.get(leader);
@@ -224,9 +216,9 @@ public class Kafka08Fetcher<T> extends AbstractFetcher<T, TopicAndPartition> {
 						}
 						else {
 							// put elements into queue of thread
-							ClosableBlockingQueue<KafkaTopicPartitionState<TopicAndPartition>> newPartitionsQueue = 
+							ClosableBlockingQueue<KafkaTopicPartitionState<TopicAndPartition>> newPartitionsQueue =
 									brokerThread.getNewPartitionsQueue();
-							
+
 							for (KafkaTopicPartitionState<TopicAndPartition> fp : partitions) {
 								if (!newPartitionsQueue.addIfOpen(fp)) {
 									// we were unable to add the partition to the broker's queue
@@ -347,7 +339,7 @@ public class Kafka08Fetcher<T> extends AbstractFetcher<T, TopicAndPartition> {
 	// ------------------------------------------------------------------------
 
 	@Override
-	public TopicAndPartition createKafkaPartitionHandle(KafkaTopicPartition partition) {
+	protected TopicAndPartition createKafkaPartitionHandle(KafkaTopicPartition partition) {
 		return new TopicAndPartition(partition.getTopic(), partition.getPartition());
 	}
 
@@ -356,15 +348,20 @@ public class Kafka08Fetcher<T> extends AbstractFetcher<T, TopicAndPartition> {
 	// ------------------------------------------------------------------------
 
 	@Override
-	public void commitInternalOffsetsToKafka(Map<KafkaTopicPartition, Long> offsets) throws Exception {
+	public void commitInternalOffsetsToKafka(
+			Map<KafkaTopicPartition, Long> offsets,
+			@Nonnull KafkaCommitCallback commitCallback) throws Exception {
+
 		ZookeeperOffsetHandler zkHandler = this.zookeeperOffsetHandler;
 		if (zkHandler != null) {
 			try {
 				// the ZK handler takes care of incrementing the offsets by 1 before committing
 				zkHandler.prepareAndCommitOffsets(offsets);
+				commitCallback.onSuccess();
 			}
 			catch (Exception e) {
 				if (running) {
+					commitCallback.onException(e);
 					throw e;
 				} else {
 					return;
@@ -373,8 +370,7 @@ public class Kafka08Fetcher<T> extends AbstractFetcher<T, TopicAndPartition> {
 		}
 
 		// Set committed offsets in topic partition state
-		KafkaTopicPartitionState<TopicAndPartition>[] partitions = subscribedPartitionStates();
-		for (KafkaTopicPartitionState<TopicAndPartition> partition : partitions) {
+		for (KafkaTopicPartitionState<TopicAndPartition> partition : subscribedPartitionStates()) {
 			Long offset = offsets.get(partition.getKafkaTopicPartition());
 			if (offset != null) {
 				partition.setCommittedOffset(offset);
@@ -389,8 +385,7 @@ public class Kafka08Fetcher<T> extends AbstractFetcher<T, TopicAndPartition> {
 	private SimpleConsumerThread<T> createAndStartSimpleConsumerThread(
 			List<KafkaTopicPartitionState<TopicAndPartition>> seedPartitions,
 			Node leader,
-			ExceptionProxy errorHandler) throws IOException, ClassNotFoundException
-	{
+			ExceptionProxy errorHandler) throws IOException, ClassNotFoundException {
 		// each thread needs its own copy of the deserializer, because the deserializer is
 		// not necessarily thread safe
 		final KeyedDeserializationSchema<T> clonedDeserializer =
@@ -398,7 +393,7 @@ public class Kafka08Fetcher<T> extends AbstractFetcher<T, TopicAndPartition> {
 
 		// seed thread with list of fetch partitions (otherwise it would shut down immediately again
 		SimpleConsumerThread<T> brokerThread = new SimpleConsumerThread<>(
-				this, errorHandler, kafkaConfig, leader, seedPartitions, unassignedPartitionsQueue, 
+				this, errorHandler, kafkaConfig, leader, seedPartitions, unassignedPartitionsQueue,
 				clonedDeserializer, invalidOffsetBehavior);
 
 		brokerThread.setName(String.format("SimpleConsumer - %s - broker-%s (%s:%d)",
@@ -411,7 +406,7 @@ public class Kafka08Fetcher<T> extends AbstractFetcher<T, TopicAndPartition> {
 	}
 
 	/**
-	 * Returns a list of unique topics from for the given partitions
+	 * Returns a list of unique topics from for the given partitions.
 	 *
 	 * @param partitions A the partitions
 	 * @return A list of unique topics
@@ -425,26 +420,25 @@ public class Kafka08Fetcher<T> extends AbstractFetcher<T, TopicAndPartition> {
 	}
 
 	/**
-	 * Find leaders for the partitions
+	 * Find leaders for the partitions.
 	 *
-	 * From a high level, the method does the following:
+	 * <p>From a high level, the method does the following:
 	 *	 - Get a list of FetchPartitions (usually only a few partitions)
 	 *	 - Get the list of topics from the FetchPartitions list and request the partitions for the topics. (Kafka doesn't support getting leaders for a set of partitions)
-	 *	 - Build a Map<Leader, List<FetchPartition>> where only the requested partitions are contained.
+	 *	 - Build a Map&lt;Leader, List&lt;FetchPartition&gt;&gt; where only the requested partitions are contained.
 	 *
 	 * @param partitionsToAssign fetch partitions list
 	 * @return leader to partitions map
 	 */
 	private static Map<Node, List<KafkaTopicPartitionState<TopicAndPartition>>> findLeaderForPartitions(
 			List<KafkaTopicPartitionState<TopicAndPartition>> partitionsToAssign,
-			Properties kafkaProperties) throws Exception
-	{
+			Properties kafkaProperties) throws Exception {
 		if (partitionsToAssign.isEmpty()) {
 			throw new IllegalArgumentException("Leader request for empty partitions list");
 		}
 
 		LOG.info("Refreshing leader information for partitions {}", partitionsToAssign);
-		
+
 		// this request is based on the topic names
 		PartitionInfoFetcher infoFetcher = new PartitionInfoFetcher(getTopics(partitionsToAssign), kafkaProperties);
 		infoFetcher.start();
@@ -465,7 +459,7 @@ public class Kafka08Fetcher<T> extends AbstractFetcher<T, TopicAndPartition> {
 		// final mapping from leader -> list(fetchPartition)
 		Map<Node, List<KafkaTopicPartitionState<TopicAndPartition>>> leaderToPartitions = new HashMap<>();
 
-		for(KafkaTopicPartitionLeader partitionLeader: topicPartitionWithLeaderList) {
+		for (KafkaTopicPartitionLeader partitionLeader: topicPartitionWithLeaderList) {
 			if (unassignedPartitions.size() == 0) {
 				// we are done: all partitions are assigned
 				break;

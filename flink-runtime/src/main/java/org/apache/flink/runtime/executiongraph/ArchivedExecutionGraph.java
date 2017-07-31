@@ -24,7 +24,7 @@ import org.apache.flink.runtime.checkpoint.CheckpointCoordinator;
 import org.apache.flink.runtime.checkpoint.CheckpointStatsSnapshot;
 import org.apache.flink.runtime.jobgraph.JobStatus;
 import org.apache.flink.runtime.jobgraph.JobVertexID;
-import org.apache.flink.runtime.jobgraph.tasks.JobSnapshottingSettings;
+import org.apache.flink.runtime.jobgraph.tasks.JobCheckpointingSettings;
 import org.apache.flink.util.SerializedValue;
 
 import javax.annotation.Nullable;
@@ -71,7 +71,7 @@ public class ArchivedExecutionGraph implements AccessExecutionGraph, Serializabl
 	 * The exception that caused the job to fail. This is set to the first root exception
 	 * that was not recoverable and triggered job failure
 	 */
-	private final String failureCause;
+	private final ErrorInfo failureCause;
 
 	// ------ Fields that are only relevant for archived execution graphs ------------
 	private final String jsonPlan;
@@ -81,7 +81,7 @@ public class ArchivedExecutionGraph implements AccessExecutionGraph, Serializabl
 	private final Map<String, SerializedValue<Object>> serializedUserAccumulators;
 
 	@Nullable
-	private final JobSnapshottingSettings jobSnapshottingSettings;
+	private final JobCheckpointingSettings jobCheckpointingSettings;
 
 	@Nullable
 	private final CheckpointStatsSnapshot checkpointStatsSnapshot;
@@ -93,13 +93,13 @@ public class ArchivedExecutionGraph implements AccessExecutionGraph, Serializabl
 			List<ArchivedExecutionJobVertex> verticesInCreationOrder,
 			long[] stateTimestamps,
 			JobStatus state,
-			String failureCause,
+			ErrorInfo failureCause,
 			String jsonPlan,
 			StringifiedAccumulatorResult[] archivedUserAccumulators,
 			Map<String, SerializedValue<Object>> serializedUserAccumulators,
 			ArchivedExecutionConfig executionConfig,
 			boolean isStoppable,
-			@Nullable JobSnapshottingSettings jobSnapshottingSettings,
+			@Nullable JobCheckpointingSettings jobCheckpointingSettings,
 			@Nullable CheckpointStatsSnapshot checkpointStatsSnapshot) {
 
 		this.jobID = jobID;
@@ -114,7 +114,7 @@ public class ArchivedExecutionGraph implements AccessExecutionGraph, Serializabl
 		this.serializedUserAccumulators = serializedUserAccumulators;
 		this.archivedExecutionConfig = executionConfig;
 		this.isStoppable = isStoppable;
-		this.jobSnapshottingSettings = jobSnapshottingSettings;
+		this.jobCheckpointingSettings = jobCheckpointingSettings;
 		this.checkpointStatsSnapshot = checkpointStatsSnapshot;
 	}
 
@@ -141,7 +141,7 @@ public class ArchivedExecutionGraph implements AccessExecutionGraph, Serializabl
 	}
 
 	@Override
-	public String getFailureCauseAsString() {
+	public ErrorInfo getFailureCause() {
 		return failureCause;
 	}
 
@@ -210,9 +210,8 @@ public class ArchivedExecutionGraph implements AccessExecutionGraph, Serializabl
 		return null;
 	}
 
-	@Override
-	public JobSnapshottingSettings getJobSnapshottingSettings() {
-		return jobSnapshottingSettings;
+	public JobCheckpointingSettings getJobCheckpointingSettings() {
+		return jobCheckpointingSettings;
 	}
 
 	@Override

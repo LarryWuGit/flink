@@ -18,6 +18,18 @@
 
 package org.apache.flink.runtime.webmonitor.handlers;
 
+import org.apache.flink.api.common.JobID;
+import org.apache.flink.api.java.tuple.Tuple2;
+import org.apache.flink.configuration.ConfigConstants;
+import org.apache.flink.configuration.CoreOptions;
+import org.apache.flink.runtime.checkpoint.CheckpointCoordinator;
+import org.apache.flink.runtime.executiongraph.AccessExecutionGraph;
+import org.apache.flink.runtime.instance.ActorGateway;
+import org.apache.flink.runtime.messages.JobManagerMessages.CancelJobWithSavepoint;
+import org.apache.flink.runtime.messages.JobManagerMessages.CancellationFailure;
+import org.apache.flink.runtime.messages.JobManagerMessages.CancellationSuccess;
+import org.apache.flink.runtime.webmonitor.ExecutionGraphHolder;
+
 import akka.dispatch.OnComplete;
 import com.fasterxml.jackson.core.JsonGenerator;
 import io.netty.buffer.Unpooled;
@@ -26,27 +38,19 @@ import io.netty.handler.codec.http.FullHttpResponse;
 import io.netty.handler.codec.http.HttpHeaders;
 import io.netty.handler.codec.http.HttpResponseStatus;
 import io.netty.handler.codec.http.HttpVersion;
-import org.apache.flink.api.common.JobID;
-import org.apache.flink.api.java.tuple.Tuple2;
-import org.apache.flink.configuration.ConfigConstants;
-import org.apache.flink.runtime.checkpoint.CheckpointCoordinator;
-import org.apache.flink.runtime.executiongraph.AccessExecutionGraph;
-import org.apache.flink.runtime.instance.ActorGateway;
-import org.apache.flink.runtime.messages.JobManagerMessages.CancelJobWithSavepoint;
-import org.apache.flink.runtime.messages.JobManagerMessages.CancellationFailure;
-import org.apache.flink.runtime.messages.JobManagerMessages.CancellationSuccess;
-import org.apache.flink.runtime.webmonitor.ExecutionGraphHolder;
-import scala.concurrent.ExecutionContext;
-import scala.concurrent.Future;
-import scala.concurrent.duration.FiniteDuration;
 
 import javax.annotation.Nullable;
+
 import java.io.IOException;
 import java.io.StringWriter;
 import java.nio.charset.Charset;
 import java.util.ArrayDeque;
 import java.util.HashMap;
 import java.util.Map;
+
+import scala.concurrent.ExecutionContext;
+import scala.concurrent.Future;
+import scala.concurrent.duration.FiniteDuration;
 
 import static org.apache.flink.util.Preconditions.checkNotNull;
 
@@ -67,13 +71,13 @@ public class JobCancellationWithSavepointHandlers {
 	/** Shared lock between Trigger and In-Progress handlers. */
 	private final Object lock = new Object();
 
-	/** In-Progress requests */
+	/** In-Progress requests. */
 	private final Map<JobID, Long> inProgress = new HashMap<>();
 
 	/** Succeeded/failed request. Either String or Throwable. */
 	private final Map<Long, Object> completed = new HashMap<>();
 
-	/** Atomic request counter */
+	/** Atomic request counter. */
 	private long requestCounter;
 
 	/** Handler for trigger requests. */
@@ -160,7 +164,7 @@ public class JobCancellationWithSavepointHandlers {
 								throw new IllegalStateException("No savepoint directory configured. " +
 										"You can either specify a directory when triggering this savepoint or " +
 										"configure a cluster-wide default via key '" +
-										ConfigConstants.SAVEPOINT_DIRECTORY_KEY + "'.");
+										CoreOptions.SAVEPOINT_DIRECTORY.key() + "'.");
 							} else {
 								targetDirectory = defaultSavepointDirectory;
 							}
@@ -244,7 +248,7 @@ public class JobCancellationWithSavepointHandlers {
 
 			// Accepted response
 			StringWriter writer = new StringWriter();
-			JsonGenerator gen = JsonFactory.jacksonFactory.createGenerator(writer);
+			JsonGenerator gen = JsonFactory.JACKSON_FACTORY.createGenerator(writer);
 			gen.writeStartObject();
 			gen.writeStringField("status", "accepted");
 			gen.writeNumberField("request-id", requestId);
@@ -262,7 +266,7 @@ public class JobCancellationWithSavepointHandlers {
 
 			response.headers().set(HttpHeaders.Names.LOCATION, location);
 
-			response.headers().set(HttpHeaders.Names.CONTENT_TYPE, "application/json");
+			response.headers().set(HttpHeaders.Names.CONTENT_TYPE, "application/json; charset=" + ENCODING.name());
 			response.headers().set(HttpHeaders.Names.CONTENT_LENGTH, response.content().readableBytes());
 
 			FullHttpResponse accepted = response;
@@ -283,7 +287,7 @@ public class JobCancellationWithSavepointHandlers {
 		/** The number of recent checkpoints whose IDs are remembered. */
 		private static final int NUM_GHOST_REQUEST_IDS = 16;
 
-		/** Remember some recently completed */
+		/** Remember some recently completed. */
 		private final ArrayDeque<Tuple2<Long, Object>> recentlyCompleted = new ArrayDeque<>(NUM_GHOST_REQUEST_IDS);
 
 		@Override
@@ -324,7 +328,7 @@ public class JobCancellationWithSavepointHandlers {
 								if (inProgressRequestId == requestId) {
 									return createInProgressResponse(requestId);
 								} else {
-									String msg= "Request ID does not belong to JobID";
+									String msg = "Request ID does not belong to JobID";
 									return createFailureResponse(HttpResponseStatus.BAD_REQUEST, requestId, msg);
 								}
 							}
@@ -355,7 +359,7 @@ public class JobCancellationWithSavepointHandlers {
 
 		private FullHttpResponse createSuccessResponse(long requestId, String savepointPath) throws IOException {
 			StringWriter writer = new StringWriter();
-			JsonGenerator gen = JsonFactory.jacksonFactory.createGenerator(writer);
+			JsonGenerator gen = JsonFactory.JACKSON_FACTORY.createGenerator(writer);
 			gen.writeStartObject();
 
 			gen.writeStringField("status", "success");
@@ -373,7 +377,7 @@ public class JobCancellationWithSavepointHandlers {
 					HttpResponseStatus.CREATED,
 					Unpooled.wrappedBuffer(bytes));
 
-			response.headers().set(HttpHeaders.Names.CONTENT_TYPE, "application/json");
+			response.headers().set(HttpHeaders.Names.CONTENT_TYPE, "application/json; charset=" + ENCODING.name());
 			response.headers().set(HttpHeaders.Names.CONTENT_LENGTH, response.content().readableBytes());
 
 			return response;
@@ -381,7 +385,7 @@ public class JobCancellationWithSavepointHandlers {
 
 		private FullHttpResponse createInProgressResponse(long requestId) throws IOException {
 			StringWriter writer = new StringWriter();
-			JsonGenerator gen = JsonFactory.jacksonFactory.createGenerator(writer);
+			JsonGenerator gen = JsonFactory.JACKSON_FACTORY.createGenerator(writer);
 			gen.writeStartObject();
 
 			gen.writeStringField("status", "in-progress");
@@ -398,7 +402,7 @@ public class JobCancellationWithSavepointHandlers {
 					HttpResponseStatus.ACCEPTED,
 					Unpooled.wrappedBuffer(bytes));
 
-			response.headers().set(HttpHeaders.Names.CONTENT_TYPE, "application/json");
+			response.headers().set(HttpHeaders.Names.CONTENT_TYPE, "application/json; charset=" + ENCODING.name());
 			response.headers().set(HttpHeaders.Names.CONTENT_LENGTH, response.content().readableBytes());
 
 			return response;
@@ -406,7 +410,7 @@ public class JobCancellationWithSavepointHandlers {
 
 		private FullHttpResponse createFailureResponse(HttpResponseStatus code, long requestId, String errMsg) throws IOException {
 			StringWriter writer = new StringWriter();
-			JsonGenerator gen = JsonFactory.jacksonFactory.createGenerator(writer);
+			JsonGenerator gen = JsonFactory.JACKSON_FACTORY.createGenerator(writer);
 			gen.writeStartObject();
 
 			gen.writeStringField("status", "failed");
@@ -424,7 +428,7 @@ public class JobCancellationWithSavepointHandlers {
 					code,
 					Unpooled.wrappedBuffer(bytes));
 
-			response.headers().set(HttpHeaders.Names.CONTENT_TYPE, "application/json");
+			response.headers().set(HttpHeaders.Names.CONTENT_TYPE, "application/json; charset=" + ENCODING.name());
 			response.headers().set(HttpHeaders.Names.CONTENT_LENGTH, response.content().readableBytes());
 
 			return response;

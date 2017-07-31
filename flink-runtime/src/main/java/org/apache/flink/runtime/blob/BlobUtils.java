@@ -18,13 +18,12 @@
 
 package org.apache.flink.runtime.blob;
 
-import com.google.common.io.BaseEncoding;
-import org.apache.commons.io.FileUtils;
 import org.apache.flink.api.common.JobID;
-import org.apache.flink.configuration.ConfigConstants;
 import org.apache.flink.configuration.Configuration;
+import org.apache.flink.configuration.HighAvailabilityOptions;
 import org.apache.flink.configuration.IllegalConfigurationException;
-import org.apache.flink.runtime.highavailability.ZookeeperHaServices;
+import org.apache.flink.core.fs.FileSystem;
+import org.apache.flink.core.fs.Path;
 import org.apache.flink.runtime.jobmanager.HighAvailabilityMode;
 import org.apache.flink.util.StringUtils;
 import org.slf4j.Logger;
@@ -35,12 +34,12 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.net.Socket;
-import java.nio.charset.Charset;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.UUID;
 
 import static org.apache.flink.util.Preconditions.checkNotNull;
+import static org.apache.flink.util.StringUtils.isNullOrWhitespaceOnly;
 
 /**
  * Utility class to work with blob data.
@@ -55,17 +54,12 @@ public class BlobUtils {
 	/**
 	 * The prefix of all BLOB files stored by the BLOB server.
 	 */
-	static final String BLOB_FILE_PREFIX = "blob_";
+	private static final String BLOB_FILE_PREFIX = "blob_";
 
 	/**
 	 * The prefix of all job-specific directories created by the BLOB server.
 	 */
-	static final String JOB_DIR_PREFIX = "job_";
-
-	/**
-	 * The default character set to translate between characters and bytes.
-	 */
-	static final Charset DEFAULT_CHARSET = ConfigConstants.DEFAULT_CHARSET;
+	private static final String JOB_DIR_PREFIX = "job_";
 
 	/**
 	 * Creates a BlobStore based on the parameters set in the configuration.
@@ -78,16 +72,47 @@ public class BlobUtils {
 	 * @throws IOException
 	 * 		thrown if the (distributed) file storage cannot be created
 	 */
-	static BlobStore createBlobStoreFromConfig(Configuration config) throws IOException {
+	public static BlobStoreService createBlobStoreFromConfig(Configuration config) throws IOException {
 		HighAvailabilityMode highAvailabilityMode = HighAvailabilityMode.fromConfig(config);
 
 		if (highAvailabilityMode == HighAvailabilityMode.NONE) {
 			return new VoidBlobStore();
 		} else if (highAvailabilityMode == HighAvailabilityMode.ZOOKEEPER) {
-			return ZookeeperHaServices.createBlobStore(config);
+			return createFileSystemBlobStore(config);
 		} else {
 			throw new IllegalConfigurationException("Unexpected high availability mode '" + highAvailabilityMode + "'.");
 		}
+	}
+
+	private static BlobStoreService createFileSystemBlobStore(Configuration configuration) throws IOException {
+		String storagePath = configuration.getValue(
+			HighAvailabilityOptions.HA_STORAGE_PATH);
+		if (isNullOrWhitespaceOnly(storagePath)) {
+			throw new IllegalConfigurationException("Configuration is missing the mandatory parameter: " +
+				HighAvailabilityOptions.HA_STORAGE_PATH);
+		}
+
+		final Path path;
+		try {
+			path = new Path(storagePath);
+		} catch (Exception e) {
+			throw new IOException("Invalid path for highly available storage (" +
+				HighAvailabilityOptions.HA_STORAGE_PATH.key() + ')', e);
+		}
+
+		final FileSystem fileSystem;
+		try {
+			fileSystem = path.getFileSystem();
+		} catch (Exception e) {
+			throw new IOException("Could not create FileSystem for highly available storage (" +
+				HighAvailabilityOptions.HA_STORAGE_PATH.key() + ')', e);
+		}
+
+		final String clusterId =
+			configuration.getValue(HighAvailabilityOptions.HA_CLUSTER_ID);
+		storagePath += "/" + clusterId;
+
+		return new FileSystemBlobStore(fileSystem, storagePath);
 	}
 
 	/**
@@ -171,58 +196,6 @@ public class BlobUtils {
 	}
 
 	/**
-	 * Returns the (designated) physical storage location of the BLOB with the given job ID and key.
-	 *
-	 * @param jobID
-	 *        the ID of the job the BLOB belongs to
-	 * @param key
-	 *        the key of the BLOB
-	 * @return the (designated) physical storage location of the BLOB with the given job ID and key
-	 */
-	static File getStorageLocation(File storageDir, JobID jobID, String key) {
-		return new File(getJobDirectory(storageDir, jobID), BLOB_FILE_PREFIX + encodeKey(key));
-	}
-
-	/**
-	 * Returns the BLOB server's storage directory for BLOBs belonging to the job with the given ID.
-	 *
-	 * @param jobID
-	 *        the ID of the job to return the storage directory for
-	 * @return the storage directory for BLOBs belonging to the job with the given ID
-	 */
-	private static File getJobDirectory(File storageDir, JobID jobID) {
-		final File jobDirectory = new File(storageDir, JOB_DIR_PREFIX + jobID.toString());
-
-		if (!jobDirectory.exists() && !jobDirectory.mkdirs()) {
-			throw new RuntimeException("Could not create jobId directory '" + jobDirectory.getAbsolutePath() + "'.");
-		}
-
-		return jobDirectory;
-	}
-
-	/**
-	 * Translates the user's key for a BLOB into the internal name used by the BLOB server
-	 *
-	 * @param key
-	 *        the user's key for a BLOB
-	 * @return the internal name for the BLOB as used by the BLOB server
-	 */
-	static String encodeKey(String key) {
-		return BaseEncoding.base64().encode(key.getBytes(DEFAULT_CHARSET));
-	}
-
-	/**
-	 * Deletes the storage directory for the job with the given ID.
-	 *
-	 * @param jobID
-	 *			jobID whose directory shall be deleted
-	 */
-	static void deleteJobDirectory(File storageDir, JobID jobID) throws IOException {
-		File directory = getJobDirectory(storageDir, jobID);
-		FileUtils.deleteDirectory(directory);
-	}
-
-	/**
 	 * Creates a new instance of the message digest to use for the BLOB key computation.
 	 *
 	 * @return a new instance of the message digest to use for the BLOB key computation
@@ -246,10 +219,10 @@ public class BlobUtils {
 			@Override
 			public void run() {
 				try {
-					service.shutdown();
+					service.close();
 				}
 				catch (Throwable t) {
-					logger.error("Error during shutdown of blob service via JVM shutdown hook: " + t.getMessage(), t);
+					logger.error("Error during shutdown of blob service via JVM shutdown hook.", t);
 				}
 			}
 		});
@@ -370,19 +343,6 @@ public class BlobUtils {
 	static String getRecoveryPath(String basePath, BlobKey blobKey) {
 		// format: $base/cache/blob_$key
 		return String.format("%s/cache/%s%s", basePath, BLOB_FILE_PREFIX, blobKey.toString());
-	}
-
-	/**
-	 * Returns the path for the given job ID and key.
-	 *
-	 * <p>The returned path can be used with the state backend for recovery purposes.
-	 *
-	 * <p>This follows the same scheme as {@link #getStorageLocation(File, JobID, String)}.
-	 */
-	static String getRecoveryPath(String basePath, JobID jobId, String key) {
-		// format: $base/job_$id/blob_$key
-		return String.format("%s/%s%s/%s%s", basePath, JOB_DIR_PREFIX, jobId.toString(),
-				BLOB_FILE_PREFIX, encodeKey(key));
 	}
 
 	/**

@@ -19,16 +19,27 @@
 package org.apache.flink.graph.drivers;
 
 import org.apache.flink.client.program.ProgramParametrizationException;
+import org.apache.flink.graph.asm.dataset.ChecksumHashCode.Checksum;
+
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.junit.runners.Parameterized;
 
+/**
+ * Tests for {@link ClusteringCoefficient}.
+ */
 @RunWith(Parameterized.class)
-public class ClusteringCoefficientITCase
-extends DriverBaseITCase {
+public class ClusteringCoefficientITCase extends CopyableValueDriverBaseITCase {
 
-	public ClusteringCoefficientITCase(TestExecutionMode mode) {
-		super(mode);
+	public ClusteringCoefficientITCase(String idType, TestExecutionMode mode) {
+		super(idType, mode);
+	}
+
+	private String[] parameters(int scale, String order, String simplify, String output) {
+		return new String[] {
+			"--algorithm", "ClusteringCoefficient", "--order", order,
+			"--input", "RMatGraph", "--scale", Integer.toString(scale), "--type", idType, "--simplify", simplify,
+			"--output", output};
 	}
 
 	@Test
@@ -42,48 +53,24 @@ extends DriverBaseITCase {
 	}
 
 	@Test
-	public void testDirectedHashWithRMatIntegerGraph() throws Exception {
+	public void testHashWithDirectedRMatGraph() throws Exception {
 		String expected = "\n" +
-			"ChecksumHashCode 0x000001c0409df6c0, count 902\n" +
-			"triplet count: 1003442, triangle count: 225147, global clustering coefficient: 0.22437470[0-9]+\n" +
-			"vertex count: 902, average clustering coefficient: 0.32943748[0-9]+\n";
+			new Checksum(233, 0x00000075d99a55b6L) + "\n\n" +
+			"triplet count: 97315, triangle count: 30705, global clustering coefficient: 0.31552175[0-9]+\n" +
+			"vertex count: 233, average clustering coefficient: 0.41178524[0-9]+\n";
 
-		expectedOutput(
-			new String[]{"--algorithm", "ClusteringCoefficient", "--order", "directed",
-				"--input", "RMatGraph", "--type", "integer", "--simplify", "directed",
-				"--output", "hash"},
-			expected);
+		expectedOutput(parameters(8, "directed", "directed", "hash"), expected);
 	}
 
 	@Test
-	public void testDirectedPrintWithRMatIntegerGraph() throws Exception {
-		expectedCount(
-			new String[]{"--algorithm", "ClusteringCoefficient", "--order", "directed",
-				"--input", "RMatGraph", "--type", "integer", "--simplify", "directed",
-				"--output", "print"},
-			904);
-	}
+	public void testHashWithUndirectedRMatGraph() throws Exception {
+		String expected = "\n\n" +
+			"triplet count: 97315, triangle count: 30705, global clustering coefficient: 0.31552175[0-9]+\n" +
+			"vertex count: 233, average clustering coefficient: 0.50945459[0-9]+\n";
 
-	@Test
-	public void testUndirectedHashWithRMatIntegerGraph() throws Exception {
-		String expected = "\n" +
-			"ChecksumHashCode 0x000001ccf8c45fdb, count 902\n" +
-			"triplet count: 1003442, triangle count: 225147, global clustering coefficient: 0.22437470[0-9]+\n" +
-			"vertex count: 902, average clustering coefficient: 0.42173070[0-9]+\n";
-
-		expectedOutput(
-			new String[]{"--algorithm", "ClusteringCoefficient", "--order", "undirected",
-				"--input", "RMatGraph", "--type", "integer", "--simplify", "undirected",
-				"--output", "hash"},
-			expected);
-	}
-
-	@Test
-	public void testUndirectedPrintWithRMatIntegerGraph() throws Exception {
-		expectedCount(
-			new String[]{"--algorithm", "ClusteringCoefficient", "--order", "undirected",
-				"--input", "RMatGraph", "--type", "integer", "--simplify", "undirected",
-				"--output", "print"},
-			904);
+		expectedOutput(parameters(8, "directed", "undirected", "hash"),
+			"\n" + new Checksum(233, 0x00000076635e00e2L) + expected);
+		expectedOutput(parameters(8, "undirected", "undirected", "hash"),
+			"\n" + new Checksum(233, 0x000000743ef6d14bL) + expected);
 	}
 }

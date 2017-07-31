@@ -26,11 +26,16 @@ import org.apache.calcite.rel.{RelNode, RelWriter}
 import org.apache.calcite.rex._
 import org.apache.flink.api.common.functions.FlatMapFunction
 import org.apache.flink.api.java.DataSet
+import org.apache.flink.api.java.typeutils.RowTypeInfo
 import org.apache.flink.table.api.BatchTableEnvironment
 import org.apache.flink.table.calcite.FlinkTypeFactory
-import org.apache.flink.table.codegen.CodeGenerator
+import org.apache.flink.table.codegen.FunctionCodeGenerator
 import org.apache.flink.table.plan.nodes.CommonCalc
+import org.apache.flink.table.plan.schema.RowSchema
+import org.apache.flink.table.runtime.FlatMapRunner
 import org.apache.flink.types.Row
+
+import scala.collection.JavaConverters._
 
 /**
   * Flink RelNode which matches along with LogicalCalc.
@@ -83,24 +88,29 @@ class DataSetCalc(
 
     val inputDS = getInput.asInstanceOf[DataSetRel].translateToPlan(tableEnv)
 
-    val returnType = FlinkTypeFactory.toInternalRowTypeInfo(getRowType)
+    val generator = new FunctionCodeGenerator(config, false, inputDS.getType)
 
-    val generator = new CodeGenerator(config, false, inputDS.getType)
+    val returnType = FlinkTypeFactory.toInternalRowTypeInfo(getRowType).asInstanceOf[RowTypeInfo]
 
-    val body = functionBody(
+    val projection = calcProgram.getProjectList.asScala.map(calcProgram.expandLocalRef)
+    val condition = if (calcProgram.getCondition != null) {
+      Some(calcProgram.expandLocalRef(calcProgram.getCondition))
+    } else {
+      None
+    }
+
+    val genFunction = generateFunction(
       generator,
-      inputDS.getType,
-      getRowType,
-      calcProgram,
-      config)
-
-    val genFunction = generator.generateFunction(
       ruleDescription,
-      classOf[FlatMapFunction[Row, Row]],
-      body,
-      returnType)
+      new RowSchema(getInput.getRowType),
+      new RowSchema(getRowType),
+      projection,
+      condition,
+      config,
+      classOf[FlatMapFunction[Row, Row]])
 
-    val mapFunc = calcMapFunction(genFunction)
-    inputDS.flatMap(mapFunc).name(calcOpName(calcProgram, getExpressionString))
+    val runner = new FlatMapRunner(genFunction.name, genFunction.code, returnType)
+
+    inputDS.flatMap(runner).name(calcOpName(calcProgram, getExpressionString))
   }
 }

@@ -15,15 +15,20 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 package org.apache.flink.streaming.connectors.fs.bucketing;
 
-import org.apache.commons.io.FileUtils;
 import org.apache.flink.streaming.api.operators.StreamSink;
 import org.apache.flink.streaming.connectors.fs.RollingSink;
 import org.apache.flink.streaming.connectors.fs.StringWriter;
 import org.apache.flink.streaming.runtime.streamrecord.StreamRecord;
 import org.apache.flink.streaming.util.OneInputStreamOperatorTestHarness;
+import org.apache.flink.util.OperatingSystem;
+
+import org.apache.commons.io.FileUtils;
 import org.junit.Assert;
+import org.junit.Assume;
+import org.junit.BeforeClass;
 import org.junit.ClassRule;
 import org.junit.Test;
 import org.junit.rules.TemporaryFolder;
@@ -34,6 +39,9 @@ import java.net.URL;
 import java.util.List;
 import java.util.Map;
 
+/**
+ * Tests the migration from {@link RollingSink} to {@link BucketingSink}.
+ */
 public class RollingToBucketingMigrationTest {
 
 	@ClassRule
@@ -43,6 +51,11 @@ public class RollingToBucketingMigrationTest {
 	private static final String PENDING_SUFFIX = ".pending";
 	private static final String IN_PROGRESS_SUFFIX = ".in-progress";
 	private static final String VALID_LENGTH_SUFFIX = ".valid";
+
+	@BeforeClass
+	public static void verifyOS() {
+		Assume.assumeTrue("HDFS cluster cannot be started on Windows without extensions.", !OperatingSystem.isWindows());
+	}
 
 	@Test
 	public void testMigration() throws Exception {

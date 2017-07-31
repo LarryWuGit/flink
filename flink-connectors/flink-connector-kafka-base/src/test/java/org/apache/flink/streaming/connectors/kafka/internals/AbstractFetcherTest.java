@@ -23,13 +23,15 @@ import org.apache.flink.streaming.api.functions.AssignerWithPunctuatedWatermarks
 import org.apache.flink.streaming.api.functions.source.SourceFunction.SourceContext;
 import org.apache.flink.streaming.api.watermark.Watermark;
 import org.apache.flink.streaming.runtime.streamrecord.StreamRecord;
-import org.apache.flink.streaming.runtime.tasks.TestProcessingTimeService;
 import org.apache.flink.streaming.runtime.tasks.ProcessingTimeService;
+import org.apache.flink.streaming.runtime.tasks.TestProcessingTimeService;
 import org.apache.flink.util.SerializedValue;
 
 import org.junit.Test;
 
+import javax.annotation.Nonnull;
 import javax.annotation.Nullable;
+
 import java.util.HashMap;
 import java.util.Map;
 
@@ -38,6 +40,9 @@ import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
 import static org.mockito.Mockito.mock;
 
+/**
+ * Tests for the {@link AbstractFetcher}.
+ */
 @SuppressWarnings("serial")
 public class AbstractFetcherTest {
 
@@ -61,7 +66,7 @@ public class AbstractFetcherTest {
 			mock(TestProcessingTimeService.class),
 			0);
 
-		final KafkaTopicPartitionState<Object> partitionStateHolder = fetcher.subscribedPartitionStates()[0];
+		final KafkaTopicPartitionState<Object> partitionStateHolder = fetcher.subscribedPartitionStates().get(0);
 
 		fetcher.emitRecord(1L, partitionStateHolder, 1L);
 		fetcher.emitRecord(2L, partitionStateHolder, 2L);
@@ -92,7 +97,7 @@ public class AbstractFetcherTest {
 			processingTimeProvider,
 			0);
 
-		final KafkaTopicPartitionState<Object> partitionStateHolder = fetcher.subscribedPartitionStates()[0];
+		final KafkaTopicPartitionState<Object> partitionStateHolder = fetcher.subscribedPartitionStates().get(0);
 
 		// elements generate a watermark if the timestamp is a multiple of three
 		fetcher.emitRecord(1L, partitionStateHolder, 1L);
@@ -133,7 +138,7 @@ public class AbstractFetcherTest {
 			processingTimeProvider,
 			10);
 
-		final KafkaTopicPartitionState<Object> partitionStateHolder = fetcher.subscribedPartitionStates()[0];
+		final KafkaTopicPartitionState<Object> partitionStateHolder = fetcher.subscribedPartitionStates().get(0);
 
 		// elements generate a watermark if the timestamp is a multiple of three
 		fetcher.emitRecord(1L, partitionStateHolder, 1L);
@@ -186,12 +191,12 @@ public class AbstractFetcherTest {
 				processingTimeProvider,
 				0);
 
-		final KafkaTopicPartitionState<Object> part1 = fetcher.subscribedPartitionStates()[0];
-		final KafkaTopicPartitionState<Object> part2 = fetcher.subscribedPartitionStates()[1];
-		final KafkaTopicPartitionState<Object> part3 = fetcher.subscribedPartitionStates()[2];
+		final KafkaTopicPartitionState<Object> part1 = fetcher.subscribedPartitionStates().get(0);
+		final KafkaTopicPartitionState<Object> part2 = fetcher.subscribedPartitionStates().get(1);
+		final KafkaTopicPartitionState<Object> part3 = fetcher.subscribedPartitionStates().get(2);
 
 		// elements generate a watermark if the timestamp is a multiple of three
-		
+
 		// elements for partition 1
 		fetcher.emitRecord(1L, part1, 1L);
 		fetcher.emitRecord(2L, part1, 2L);
@@ -211,11 +216,11 @@ public class AbstractFetcherTest {
 		fetcher.emitRecord(102L, part3, 2L);
 		assertEquals(102L, sourceContext.getLatestElement().getValue().longValue());
 		assertEquals(102L, sourceContext.getLatestElement().getTimestamp());
-		
+
 		// now, we should have a watermark
 		assertTrue(sourceContext.hasWatermark());
 		assertEquals(3L, sourceContext.getLatestWatermark().getTimestamp());
-		
+
 		// advance partition 3
 		fetcher.emitRecord(1003L, part3, 3L);
 		fetcher.emitRecord(1004L, part3, 4L);
@@ -239,7 +244,7 @@ public class AbstractFetcherTest {
 		assertTrue(sourceContext.hasWatermark());
 		assertEquals(15L, sourceContext.getLatestWatermark().getTimestamp());
 	}
-	
+
 	@Test
 	public void testPeriodicWatermarks() throws Exception {
 		final String testTopic = "test topic name";
@@ -260,9 +265,9 @@ public class AbstractFetcherTest {
 				processingTimeService,
 				10);
 
-		final KafkaTopicPartitionState<Object> part1 = fetcher.subscribedPartitionStates()[0];
-		final KafkaTopicPartitionState<Object> part2 = fetcher.subscribedPartitionStates()[1];
-		final KafkaTopicPartitionState<Object> part3 = fetcher.subscribedPartitionStates()[2];
+		final KafkaTopicPartitionState<Object> part1 = fetcher.subscribedPartitionStates().get(0);
+		final KafkaTopicPartitionState<Object> part2 = fetcher.subscribedPartitionStates().get(1);
+		final KafkaTopicPartitionState<Object> part3 = fetcher.subscribedPartitionStates().get(2);
 
 		// elements generate a watermark if the timestamp is a multiple of three
 
@@ -329,8 +334,7 @@ public class AbstractFetcherTest {
 				SerializedValue<AssignerWithPeriodicWatermarks<T>> watermarksPeriodic,
 				SerializedValue<AssignerWithPunctuatedWatermarks<T>> watermarksPunctuated,
 				ProcessingTimeService processingTimeProvider,
-				long autoWatermarkInterval) throws Exception
-		{
+				long autoWatermarkInterval) throws Exception {
 			super(
 				sourceContext,
 				assignedPartitionsWithStartOffsets,
@@ -358,7 +362,9 @@ public class AbstractFetcherTest {
 		}
 
 		@Override
-		public void commitInternalOffsetsToKafka(Map<KafkaTopicPartition, Long> offsets) throws Exception {
+		public void commitInternalOffsetsToKafka(
+				Map<KafkaTopicPartition, Long> offsets,
+				@Nonnull KafkaCommitCallback callback) throws Exception {
 			throw new UnsupportedOperationException();
 		}
 	}
@@ -391,7 +397,6 @@ public class AbstractFetcherTest {
 			}
 		}
 
-
 		@Override
 		public void markAsTemporarilyIdle() {
 			throw new UnsupportedOperationException();
@@ -412,7 +417,7 @@ public class AbstractFetcherTest {
 		public boolean hasWatermark() {
 			return currentWatermark != null;
 		}
-		
+
 		public Watermark getLatestWatermark() throws InterruptedException {
 			synchronized (watermarkLock) {
 				while (currentWatermark == null) {
@@ -430,7 +435,7 @@ public class AbstractFetcherTest {
 	private static class PeriodicTestExtractor implements AssignerWithPeriodicWatermarks<Long> {
 
 		private volatile long maxTimestamp = Long.MIN_VALUE;
-		
+
 		@Override
 		public long extractTimestamp(Long element, long previousElementTimestamp) {
 			maxTimestamp = Math.max(maxTimestamp, element);
@@ -456,6 +461,6 @@ public class AbstractFetcherTest {
 		public Watermark checkAndGetNextWatermark(Long lastElement, long extractedTimestamp) {
 			return extractedTimestamp % 3 == 0 ? new Watermark(extractedTimestamp) : null;
 		}
-		
+
 	}
 }

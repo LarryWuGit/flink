@@ -46,17 +46,17 @@ import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.ThreadLocalRandom;
 
+/**
+ * Test class used by the {@link org.apache.flink.test.classloading.ClassLoaderITCase}.
+ */
 public class CheckpointingCustomKvStateProgram {
 
 	public static void main(String[] args) throws Exception {
-		final String jarFile = args[0];
-		final String host = args[1];
-		final int port = Integer.parseInt(args[2]);
-		final String checkpointPath = args[3];
-		final String outputPath = args[4];
+		final String checkpointPath = args[0];
+		final String outputPath = args[1];
 		final int parallelism = 1;
 
-		StreamExecutionEnvironment env = StreamExecutionEnvironment.createRemoteEnvironment(host, port, jarFile);
+		StreamExecutionEnvironment env = StreamExecutionEnvironment.getExecutionEnvironment();
 
 		env.setParallelism(parallelism);
 		env.getConfig().disableSysoutLogging();
@@ -74,7 +74,7 @@ public class CheckpointingCustomKvStateProgram {
 						return new Tuple2<>(ThreadLocalRandom.current().nextInt(parallelism), value);
 					}
 				})
-				.keyBy(new KeySelector<Tuple2<Integer,Integer>, Integer>() {
+				.keyBy(new KeySelector<Tuple2<Integer, Integer>, Integer>() {
 					private static final long serialVersionUID = 1L;
 
 					@Override
@@ -136,12 +136,11 @@ public class CheckpointingCustomKvStateProgram {
 			this.kvState = getRuntimeContext().getReducingState(stateDescriptor);
 		}
 
-
 		@Override
 		public void flatMap(Tuple2<Integer, Integer> value, Collector<Integer> out) throws Exception {
 			kvState.add(value.f1);
 
-			if(atLeastOneSnapshotComplete) {
+			if (atLeastOneSnapshotComplete) {
 				if (restored) {
 					throw new SuccessException();
 				} else {
@@ -231,6 +230,5 @@ public class CheckpointingCustomKvStateProgram {
 		public boolean canEqual(Object obj) {
 			return obj instanceof CustomIntSerializer;
 		}
-
 	}
 }

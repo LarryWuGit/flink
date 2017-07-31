@@ -20,6 +20,7 @@ package org.apache.flink.hdfstests;
 
 import org.apache.flink.api.common.ExecutionConfig;
 import org.apache.flink.api.common.io.FileInputFormat;
+import org.apache.flink.api.common.io.FilePathFilter;
 import org.apache.flink.api.common.typeinfo.TypeInformation;
 import org.apache.flink.api.java.io.TextInputFormat;
 import org.apache.flink.api.java.tuple.Tuple2;
@@ -28,26 +29,28 @@ import org.apache.flink.configuration.ConfigConstants;
 import org.apache.flink.configuration.Configuration;
 import org.apache.flink.core.fs.FileInputSplit;
 import org.apache.flink.core.fs.Path;
-import org.apache.flink.api.common.io.FilePathFilter;
 import org.apache.flink.core.testutils.OneShotLatch;
 import org.apache.flink.streaming.api.TimeCharacteristic;
 import org.apache.flink.streaming.api.functions.source.ContinuousFileMonitoringFunction;
 import org.apache.flink.streaming.api.functions.source.ContinuousFileReaderOperator;
-import org.apache.flink.streaming.api.functions.source.TimestampedFileInputSplit;
 import org.apache.flink.streaming.api.functions.source.FileProcessingMode;
 import org.apache.flink.streaming.api.functions.source.SourceFunction;
+import org.apache.flink.streaming.api.functions.source.TimestampedFileInputSplit;
 import org.apache.flink.streaming.api.operators.StreamSource;
 import org.apache.flink.streaming.api.watermark.Watermark;
 import org.apache.flink.streaming.runtime.streamrecord.StreamRecord;
 import org.apache.flink.streaming.runtime.tasks.OperatorStateHandles;
 import org.apache.flink.streaming.util.AbstractStreamOperatorTestHarness;
 import org.apache.flink.streaming.util.OneInputStreamOperatorTestHarness;
+import org.apache.flink.util.OperatingSystem;
 import org.apache.flink.util.Preconditions;
+
 import org.apache.hadoop.fs.FSDataOutputStream;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.hdfs.MiniDFSCluster;
 import org.junit.AfterClass;
 import org.junit.Assert;
+import org.junit.Assume;
 import org.junit.BeforeClass;
 import org.junit.ClassRule;
 import org.junit.Test;
@@ -68,6 +71,9 @@ import java.util.TreeSet;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentLinkedQueue;
 
+/**
+ * Tests for the {@link ContinuousFileMonitoringFunction} and {@link ContinuousFileReaderOperator}.
+ */
 public class ContinuousFileProcessingTest {
 
 	private static final int NO_OF_FILES = 5;
@@ -84,6 +90,8 @@ public class ContinuousFileProcessingTest {
 
 	@BeforeClass
 	public static void createHDFS() {
+		Assume.assumeTrue("HDFS cluster cannot be start on Windows without extensions.", !OperatingSystem.isWindows());
+
 		try {
 			File hdfsDir = tempFolder.newFolder();
 
@@ -94,10 +102,10 @@ public class ContinuousFileProcessingTest {
 			MiniDFSCluster.Builder builder = new MiniDFSCluster.Builder(hdConf);
 			hdfsCluster = builder.build();
 
-			hdfsURI = "hdfs://" + hdfsCluster.getURI().getHost() + ":" + hdfsCluster.getNameNodePort() +"/";
+			hdfsURI = "hdfs://" + hdfsCluster.getURI().getHost() + ":" + hdfsCluster.getNameNodePort() + "/";
 			hdfs = new org.apache.hadoop.fs.Path(hdfsURI).getFileSystem(hdConf);
 
-		} catch(Throwable e) {
+		} catch (Throwable e) {
 			e.printStackTrace();
 			Assert.fail("Test failed " + e.getMessage());
 		}
@@ -105,17 +113,15 @@ public class ContinuousFileProcessingTest {
 
 	@AfterClass
 	public static void destroyHDFS() {
-		try {
+		if (hdfsCluster != null) {
 			hdfsCluster.shutdown();
-		} catch (Throwable t) {
-			throw new RuntimeException(t);
 		}
 	}
 
 	@Test
 	public void testInvalidPathSpecification() throws Exception {
 
-		String invalidPath = "hdfs://" + hdfsCluster.getURI().getHost() + ":" + hdfsCluster.getNameNodePort() +"/invalid/";
+		String invalidPath = "hdfs://" + hdfsCluster.getURI().getHost() + ":" + hdfsCluster.getNameNodePort() + "/invalid/";
 		TextInputFormat format = new TextInputFormat(new Path(invalidPath));
 
 		ContinuousFileMonitoringFunction<String> monitoringFunction =
@@ -408,7 +414,6 @@ public class ContinuousFileProcessingTest {
 
 		TimestampedFileInputSplit split4 =
 			new TimestampedFileInputSplit(11, 0, new Path("test/test3"), 0, 100, null);
-
 
 		final OneShotLatch latch = new OneShotLatch();
 
@@ -756,7 +761,6 @@ public class ContinuousFileProcessingTest {
 	public void testFunctionRestore() throws Exception {
 		String testBasePath = hdfsURI + "/" + UUID.randomUUID() + "/";
 
-
 		org.apache.hadoop.fs.Path path = null;
 		long fileModTime = Long.MIN_VALUE;
 		for (int i = 0; i < 1; i++) {
@@ -910,8 +914,7 @@ public class ContinuousFileProcessingTest {
 		private int elementsBeforeNotifying = -1;
 		private int elementsBeforeCanceling = -1;
 
-		FileVerifyingSourceContext(OneShotLatch latch,
-								   ContinuousFileMonitoringFunction src) {
+		FileVerifyingSourceContext(OneShotLatch latch, ContinuousFileMonitoringFunction src) {
 			this(latch, src, -1, -1);
 		}
 
@@ -1041,7 +1044,7 @@ public class ContinuousFileProcessingTest {
 		FSDataOutputStream stream = hdfs.create(tmp);
 		StringBuilder str = new StringBuilder();
 		for (int i = 0; i < LINES_PER_FILE; i++) {
-			String line = fileIdx +": "+ sampleLine + " " + i +"\n";
+			String line = fileIdx + ": " + sampleLine + " " + i + "\n";
 			str.append(line);
 			stream.write(line.getBytes(ConfigConstants.DEFAULT_CHARSET));
 		}

@@ -25,6 +25,7 @@ import org.apache.flink.configuration.Configuration;
 import org.apache.flink.runtime.blob.BlobKey;
 import org.apache.flink.runtime.executiongraph.ExecutionGraph;
 import org.apache.flink.runtime.executiongraph.ExecutionJobVertex;
+import org.apache.flink.runtime.executiongraph.failover.RestartAllStrategy;
 import org.apache.flink.runtime.executiongraph.restart.NoRestartStrategy;
 import org.apache.flink.runtime.jobgraph.JobStatus;
 import org.apache.flink.runtime.jobgraph.JobVertex;
@@ -35,11 +36,11 @@ import org.apache.flink.runtime.testingUtils.TestingUtils;
 import org.apache.flink.util.SerializedValue;
 
 import org.junit.Test;
-import org.mockito.Matchers;
 
 import java.net.URL;
 import java.util.Collections;
 
+import static org.mockito.Matchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
@@ -56,10 +57,10 @@ public class ExecutionGraphCheckpointCoordinatorTest {
 		CompletedCheckpointStore store = mock(CompletedCheckpointStore.class);
 
 		ExecutionGraph graph = createExecutionGraphAndEnableCheckpointing(counter, store);
-		graph.fail(new Exception("Test Exception"));
+		graph.failGlobal(new Exception("Test Exception"));
 
 		verify(counter, times(1)).shutdown(JobStatus.FAILED);
-		verify(store, times(1)).shutdown(JobStatus.FAILED);
+		verify(store, times(1)).shutdown(eq(JobStatus.FAILED));
 	}
 
 	/**
@@ -75,8 +76,8 @@ public class ExecutionGraphCheckpointCoordinatorTest {
 		graph.suspend(new Exception("Test Exception"));
 
 		// No shutdown
-		verify(counter, times(1)).shutdown(Matchers.eq(JobStatus.SUSPENDED));
-		verify(store, times(1)).shutdown(Matchers.eq(JobStatus.SUSPENDED));
+		verify(counter, times(1)).shutdown(eq(JobStatus.SUSPENDED));
+		verify(store, times(1)).shutdown(eq(JobStatus.SUSPENDED));
 	}
 
 	private ExecutionGraph createExecutionGraphAndEnableCheckpointing(
@@ -91,6 +92,7 @@ public class ExecutionGraphCheckpointCoordinatorTest {
 			new SerializedValue<>(new ExecutionConfig()),
 			Time.days(1L),
 			new NoRestartStrategy(),
+			new RestartAllStrategy.Factory(),
 			Collections.<BlobKey>emptyList(),
 			Collections.<URL>emptyList(),
 			new Scheduler(TestingUtils.defaultExecutionContext()),
@@ -105,6 +107,7 @@ public class ExecutionGraphCheckpointCoordinatorTest {
 				Collections.<ExecutionJobVertex>emptyList(),
 				Collections.<ExecutionJobVertex>emptyList(),
 				Collections.<ExecutionJobVertex>emptyList(),
+				Collections.<MasterTriggerRestoreHook<?>>emptyList(),
 				counter,
 				store,
 				null,

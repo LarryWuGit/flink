@@ -18,11 +18,10 @@
 
 package org.apache.flink.graph.library.clustering.undirected;
 
-import org.apache.commons.lang3.builder.EqualsBuilder;
-import org.apache.commons.lang3.builder.HashCodeBuilder;
 import org.apache.flink.api.java.DataSet;
-import org.apache.flink.graph.AbstractGraphAnalytic;
 import org.apache.flink.graph.Graph;
+import org.apache.flink.graph.GraphAnalytic;
+import org.apache.flink.graph.GraphAnalyticBase;
 import org.apache.flink.graph.asm.dataset.Count;
 import org.apache.flink.graph.asm.result.PrintableResult;
 import org.apache.flink.graph.library.clustering.undirected.TriadicCensus.Result;
@@ -30,45 +29,31 @@ import org.apache.flink.graph.library.metric.undirected.VertexMetrics;
 import org.apache.flink.types.CopyableValue;
 import org.apache.flink.util.Preconditions;
 
+import org.apache.commons.lang3.builder.EqualsBuilder;
+import org.apache.commons.lang3.builder.HashCodeBuilder;
+
 import java.math.BigInteger;
 import java.text.NumberFormat;
-
-import static org.apache.flink.api.common.ExecutionConfig.PARALLELISM_DEFAULT;
 
 /**
  * A triad is formed by three connected or unconnected vertices in a graph.
  * The triadic census counts the occurrences of each type of triad.
- * <p>
- * The four types of undirected triads are formed with 0, 1, 2, or 3
+ *
+ * <p>The four types of undirected triads are formed with 0, 1, 2, or 3
  * connecting edges.
- * <p>
- * http://vlado.fmf.uni-lj.si/pub/networks/doc/triads/triads.pdf
+ *
+ * <p>See http://vlado.fmf.uni-lj.si/pub/networks/doc/triads/triads.pdf
  *
  * @param <K> graph ID type
  * @param <VV> vertex value type
  * @param <EV> edge value type
  */
 public class TriadicCensus<K extends Comparable<K> & CopyableValue<K>, VV, EV>
-extends AbstractGraphAnalytic<K, VV, EV, Result> {
+extends GraphAnalyticBase<K, VV, EV, Result> {
 
 	private Count<TriangleListing.Result<K>> triangleCount;
 
-	private VertexMetrics<K, VV, EV> vertexMetrics;
-
-	// Optional configuration
-	private int littleParallelism = PARALLELISM_DEFAULT;
-
-	/**
-	 * Override the parallelism of operators processing small amounts of data.
-	 *
-	 * @param littleParallelism operator parallelism
-	 * @return this
-	 */
-	public TriadicCensus<K, VV, EV> setLittleParallelism(int littleParallelism) {
-		this.littleParallelism = littleParallelism;
-
-		return this;
-	}
+	private GraphAnalytic<K, VV, EV, VertexMetrics.Result> vertexMetrics;
 
 	@Override
 	public TriadicCensus<K, VV, EV> run(Graph<K, VV, EV> input)
@@ -80,12 +65,12 @@ extends AbstractGraphAnalytic<K, VV, EV, Result> {
 		DataSet<TriangleListing.Result<K>> triangles = input
 			.run(new TriangleListing<K, VV, EV>()
 				.setSortTriangleVertices(false)
-				.setLittleParallelism(littleParallelism));
+				.setParallelism(parallelism));
 
 		triangleCount.run(triangles);
 
 		vertexMetrics = new VertexMetrics<K, VV, EV>()
-			.setParallelism(littleParallelism);
+			.setParallelism(parallelism);
 
 		input.run(vertexMetrics);
 
@@ -203,7 +188,7 @@ extends AbstractGraphAnalytic<K, VV, EV, Result> {
 		/**
 		 * Get the array of counts.
 		 *
-		 * The order of the counts is from least to most connected:
+		 * <p>The order of the counts is from least to most connected:
 		 *   03, 12, 21, 30
 		 *
 		 * @return array of counts
@@ -231,11 +216,19 @@ extends AbstractGraphAnalytic<K, VV, EV, Result> {
 
 		@Override
 		public boolean equals(Object obj) {
-			if (obj == null) { return false; }
-			if (obj == this) { return true; }
-			if (obj.getClass() != getClass()) { return false; }
+			if (obj == null) {
+				return false;
+			}
 
-			Result rhs = (Result)obj;
+			if (obj == this) {
+				return true;
+			}
+
+			if (obj.getClass() != getClass()) {
+				return false;
+			}
+
+			Result rhs = (Result) obj;
 
 			return new EqualsBuilder()
 				.append(counts, rhs.counts)

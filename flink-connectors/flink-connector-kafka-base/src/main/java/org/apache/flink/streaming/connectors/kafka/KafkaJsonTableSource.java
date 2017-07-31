@@ -19,9 +19,10 @@
 package org.apache.flink.streaming.connectors.kafka;
 
 import org.apache.flink.api.common.typeinfo.TypeInformation;
-import org.apache.flink.table.sources.StreamTableSource;
 import org.apache.flink.streaming.util.serialization.DeserializationSchema;
 import org.apache.flink.streaming.util.serialization.JsonRowDeserializationSchema;
+import org.apache.flink.table.sources.StreamTableSource;
+import org.apache.flink.types.Row;
 
 import java.util.Properties;
 
@@ -40,33 +41,15 @@ public abstract class KafkaJsonTableSource extends KafkaTableSource {
 	 *
 	 * @param topic      Kafka topic to consume.
 	 * @param properties Properties for the Kafka consumer.
-	 * @param fieldNames Row field names.
-	 * @param fieldTypes Row field types.
+	 * @param typeInfo   Type information describing the result type. The field names are used
+	 *                   to parse the JSON file and so are the types.
 	 */
 	KafkaJsonTableSource(
 			String topic,
 			Properties properties,
-			String[] fieldNames,
-			Class<?>[] fieldTypes) {
+			TypeInformation<Row> typeInfo) {
 
-		super(topic, properties, createDeserializationSchema(fieldNames, fieldTypes), fieldNames, fieldTypes);
-	}
-
-	/**
-	 * Creates a generic Kafka JSON {@link StreamTableSource}.
-	 *
-	 * @param topic      Kafka topic to consume.
-	 * @param properties Properties for the Kafka consumer.
-	 * @param fieldNames Row field names.
-	 * @param fieldTypes Row field types.
-	 */
-	KafkaJsonTableSource(
-			String topic,
-			Properties properties,
-			String[] fieldNames,
-			TypeInformation<?>[] fieldTypes) {
-
-		super(topic, properties, createDeserializationSchema(fieldNames, fieldTypes), fieldNames, fieldTypes);
+		super(topic, properties, createDeserializationSchema(typeInfo), typeInfo);
 	}
 
 	/**
@@ -81,17 +64,8 @@ public abstract class KafkaJsonTableSource extends KafkaTableSource {
 		deserializationSchema.setFailOnMissingField(failOnMissingField);
 	}
 
-	private static JsonRowDeserializationSchema createDeserializationSchema(
-			String[] fieldNames,
-			TypeInformation<?>[] fieldTypes) {
+	private static JsonRowDeserializationSchema createDeserializationSchema(TypeInformation<Row> typeInfo) {
 
-		return new JsonRowDeserializationSchema(fieldNames, fieldTypes);
-	}
-
-	private static JsonRowDeserializationSchema createDeserializationSchema(
-			String[] fieldNames,
-			Class<?>[] fieldTypes) {
-
-		return new JsonRowDeserializationSchema(fieldNames, fieldTypes);
+		return new JsonRowDeserializationSchema(typeInfo);
 	}
 }

@@ -11,20 +11,33 @@
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
- * WIVHOUV WARRANVIES OR CONDIVIONS OF ANY KIND, either express or implied.
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
 
 package org.apache.flink.cep.nfa;
 
-import com.google.common.collect.LinkedHashMultimap;
-import org.apache.commons.lang3.StringUtils;
 import org.apache.flink.annotation.Internal;
+import org.apache.flink.api.common.typeutils.CompatibilityResult;
+import org.apache.flink.api.common.typeutils.CompatibilityUtil;
+import org.apache.flink.api.common.typeutils.CompositeTypeSerializerConfigSnapshot;
+import org.apache.flink.api.common.typeutils.TypeDeserializerAdapter;
 import org.apache.flink.api.common.typeutils.TypeSerializer;
+import org.apache.flink.api.common.typeutils.TypeSerializerConfigSnapshot;
+import org.apache.flink.api.common.typeutils.UnloadableDummyTypeSerializer;
+import org.apache.flink.api.java.tuple.Tuple2;
+import org.apache.flink.cep.NonDuplicatingTypeSerializer;
+import org.apache.flink.core.memory.DataInputView;
 import org.apache.flink.core.memory.DataInputViewStreamWrapper;
+import org.apache.flink.core.memory.DataOutputView;
 import org.apache.flink.core.memory.DataOutputViewStreamWrapper;
+import org.apache.flink.util.Preconditions;
 
+import org.apache.commons.lang3.StringUtils;
+
+import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.ObjectInputStream;
 import java.io.ObjectOutputStream;
@@ -34,6 +47,7 @@ import java.util.Collection;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Iterator;
+import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
@@ -42,15 +56,15 @@ import java.util.Stack;
 /**
  * A shared buffer implementation which stores values under a key. Additionally, the values can be
  * versioned such that it is possible to retrieve their predecessor element in the buffer.
- * <p>
- * The idea of the implementation is to have for each key a dedicated {@link SharedBufferPage}. Each
+ *
+ * <p>The idea of the implementation is to have for each key a dedicated {@link SharedBufferPage}. Each
  * buffer page maintains a collection of the inserted values.
  *
- * The values are wrapped in a {@link SharedBufferEntry}. The shared buffer entry allows to store
+ * <p>The values are wrapped in a {@link SharedBufferEntry}. The shared buffer entry allows to store
  * relations between different entries. A dewey versioning scheme allows to discriminate between
  * different relations (e.g. preceding element).
  *
- * The implementation is strongly based on the paper "Efficient Pattern Matching over Event Streams".
+ * <p>The implementation is strongly based on the paper "Efficient Pattern Matching over Event Streams".
  *
  * @see <a href="https://people.cs.umass.edu/~yanlei/publications/sase-sigmod08.pdf">
  *     https://people.cs.umass.edu/~yanlei/publications/sase-sigmod08.pdf</a>
@@ -62,6 +76,10 @@ public class SharedBuffer<K extends Serializable, V> implements Serializable {
 
 	private static final long serialVersionUID = 9213251042562206495L;
 
+	/**
+	 * @deprecated This serializer is only used for backwards compatibility.
+	 */
+	@Deprecated
 	private final TypeSerializer<V> valueSerializer;
 
 	private transient Map<K, SharedBufferPage<K, V>> pages;
@@ -69,6 +87,12 @@ public class SharedBuffer<K extends Serializable, V> implements Serializable {
 	public SharedBuffer(final TypeSerializer<V> valueSerializer) {
 		this.valueSerializer = valueSerializer;
 		this.pages = new HashMap<>();
+	}
+
+	public TypeSerializer<V> getValueSerializer() {
+		return (valueSerializer instanceof NonDuplicatingTypeSerializer)
+				? ((NonDuplicatingTypeSerializer) valueSerializer).getTypeSerializer()
+				: valueSerializer;
 	}
 
 	/**
@@ -83,26 +107,29 @@ public class SharedBuffer<K extends Serializable, V> implements Serializable {
 	 * @param previousTimestamp Timestamp of the value for the previous relation
 	 * @param version           Version of the previous relation
 	 */
-	public void put(
+	public int put(
 			final K key,
 			final V value,
 			final long timestamp,
 			final K previousKey,
 			final V previousValue,
 			final long previousTimestamp,
+			final int previousCounter,
 			final DeweyNumber version) {
 
-		final SharedBufferEntry<K, V> previousSharedBufferEntry = get(previousKey, previousValue, previousTimestamp);
+		final SharedBufferEntry<K, V> previousSharedBufferEntry =
+				get(previousKey, previousValue, previousTimestamp, previousCounter);
 
 		// sanity check whether we've found the previous element
 		if (previousSharedBufferEntry == null && previousValue != null) {
-			throw new IllegalStateException("Could not find previous shared buffer entry with " +
+			throw new IllegalStateException("Could not find previous entry with " +
 				"key: " + previousKey + ", value: " + previousValue + " and timestamp: " +
-				previousTimestamp + ". This can indicate that the element belonging to the previous " +
-				"relation has been already pruned, even though you expect it to be still there.");
+				previousTimestamp + ". This can indicate that either you did not implement " +
+				"the equals() and hashCode() methods of your input elements properly or that " +
+				"the element belonging to that entry has been already pruned.");
 		}
 
-		put(key, value, timestamp, previousSharedBufferEntry, version);
+		return put(key, value, timestamp, previousSharedBufferEntry, version);
 	}
 
 	/**
@@ -114,16 +141,16 @@ public class SharedBuffer<K extends Serializable, V> implements Serializable {
 	 * @param timestamp Timestamp of the current value (a value requires always a timestamp to make it uniquely referable))
 	 * @param version   Version of the previous relation
 	 */
-	public void put(
+	public int put(
 			final K key,
 			final V value,
 			final long timestamp,
 			final DeweyNumber version) {
 
-		put(key, value, timestamp, null, version);
+		return put(key, value, timestamp, null, version);
 	}
 
-	private void put(
+	private int put(
 			final K key,
 			final V value,
 			final long timestamp,
@@ -136,7 +163,16 @@ public class SharedBuffer<K extends Serializable, V> implements Serializable {
 			pages.put(key, page);
 		}
 
-		page.add(new ValueTimeWrapper<>(value, timestamp), previousSharedBufferEntry, version);
+		// this assumes that elements are processed in order (in terms of time)
+		int counter = 0;
+		if (previousSharedBufferEntry != null) {
+			ValueTimeWrapper<V> prev = previousSharedBufferEntry.getValueTime();
+			if (prev != null && prev.getTimestamp() == timestamp) {
+				counter = prev.getCounter() + 1;
+			}
+		}
+		page.add(new ValueTimeWrapper<>(value, timestamp, counter), previousSharedBufferEntry, version);
+		return counter;
 	}
 
 	public boolean isEmpty() {
@@ -153,20 +189,26 @@ public class SharedBuffer<K extends Serializable, V> implements Serializable {
 	 *
 	 * @param pruningTimestamp The time which is used for pruning. All elements whose timestamp is
 	 *                         lower than the pruning timestamp will be removed.
+	 * @return {@code true} if pruning happened
 	 */
-	public void prune(long pruningTimestamp) {
+	public boolean prune(long pruningTimestamp) {
 		Iterator<Map.Entry<K, SharedBufferPage<K, V>>> iter = pages.entrySet().iterator();
+		boolean pruned = false;
 
 		while (iter.hasNext()) {
 			SharedBufferPage<K, V> page = iter.next().getValue();
 
-			page.prune(pruningTimestamp);
+			if (page.prune(pruningTimestamp)) {
+				pruned = true;
+			}
 
 			if (page.isEmpty()) {
 				// delete page if it is empty
 				iter.remove();
 			}
 		}
+
+		return pruned;
 	}
 
 	/**
@@ -179,18 +221,20 @@ public class SharedBuffer<K extends Serializable, V> implements Serializable {
 	 * @param version Version of the previous relation which shall be extracted
 	 * @return Collection of previous relations starting with the given value
 	 */
-	public Collection<LinkedHashMultimap<K, V>> extractPatterns(
-		final K key,
-		final V value,
-		final long timestamp,
-		final DeweyNumber version) {
-		Collection<LinkedHashMultimap<K, V>> result = new ArrayList<>();
+	public List<Map<K, List<V>>> extractPatterns(
+			final K key,
+			final V value,
+			final long timestamp,
+			final int counter,
+			final DeweyNumber version) {
+
+		List<Map<K, List<V>>> result = new ArrayList<>();
 
 		// stack to remember the current extraction states
 		Stack<ExtractionState<K, V>> extractionStates = new Stack<>();
 
 		// get the starting shared buffer entry for the previous relation
-		SharedBufferEntry<K, V> entry = get(key, value, timestamp);
+		SharedBufferEntry<K, V> entry = get(key, value, timestamp, counter);
 
 		if (entry != null) {
 			extractionStates.add(new ExtractionState<>(entry, version, new Stack<SharedBufferEntry<K, V>>()));
@@ -204,12 +248,18 @@ public class SharedBuffer<K extends Serializable, V> implements Serializable {
 
 				// termination criterion
 				if (currentEntry == null) {
-					final LinkedHashMultimap<K, V> completePath = LinkedHashMultimap.create();
+					final Map<K, List<V>> completePath = new HashMap<>();
 
-					while(!currentPath.isEmpty()) {
+					while (!currentPath.isEmpty()) {
 						final SharedBufferEntry<K, V> currentPathEntry = currentPath.pop();
 
-						completePath.put(currentPathEntry.getKey(), currentPathEntry.getValueTime().getValue());
+						K k = currentPathEntry.getKey();
+						List<V> values = completePath.get(k);
+						if (values == null) {
+							values = new ArrayList<>();
+							completePath.put(k, values);
+						}
+						values.add(currentPathEntry.getValueTime().getValue());
 					}
 
 					result.add(completePath);
@@ -256,8 +306,8 @@ public class SharedBuffer<K extends Serializable, V> implements Serializable {
 	 * @param value     Value to lock
 	 * @param timestamp Timestamp of the value to lock
 	 */
-	public void lock(final K key, final V value, final long timestamp) {
-		SharedBufferEntry<K, V> entry = get(key, value, timestamp);
+	public void lock(final K key, final V value, final long timestamp, int counter) {
+		SharedBufferEntry<K, V> entry = get(key, value, timestamp, counter);
 		if (entry != null) {
 			entry.increaseReferenceCounter();
 		}
@@ -271,158 +321,10 @@ public class SharedBuffer<K extends Serializable, V> implements Serializable {
 	 * @param value     Value to release
 	 * @param timestamp Timestamp of the value to release
 	 */
-	public void release(final K key, final V value, final long timestamp) {
-		SharedBufferEntry<K, V> entry = get(key, value, timestamp);
+	public void release(final K key, final V value, final long timestamp, int counter) {
+		SharedBufferEntry<K, V> entry = get(key, value, timestamp, counter);
 		if (entry != null) {
-			entry.decreaseReferenceCounter();
 			internalRemove(entry);
-		}
-	}
-
-	private void writeObject(ObjectOutputStream oos) throws IOException {
-		DataOutputViewStreamWrapper target = new DataOutputViewStreamWrapper(oos);
-		Map<SharedBufferEntry<K, V>, Integer> entryIDs = new HashMap<>();
-		int totalEdges = 0;
-		int entryCounter = 0;
-
-		oos.defaultWriteObject();
-
-		// number of pages
-		oos.writeInt(pages.size());
-
-		for (Map.Entry<K, SharedBufferPage<K, V>> pageEntry: pages.entrySet()) {
-			SharedBufferPage<K, V> page = pageEntry.getValue();
-
-			// key for the current page
-			oos.writeObject(page.getKey());
-			// number of page entries
-			oos.writeInt(page.entries.size());
-
-			for (Map.Entry<ValueTimeWrapper<V>, SharedBufferEntry<K, V>> sharedBufferEntry: page.entries.entrySet()) {
-				// serialize the sharedBufferEntry
-				SharedBufferEntry<K, V> sharedBuffer = sharedBufferEntry.getValue();
-
-				// assign id to the sharedBufferEntry for the future serialization of the previous
-				// relation
-				entryIDs.put(sharedBuffer, entryCounter++);
-
-				ValueTimeWrapper<V> valueTimeWrapper = sharedBuffer.getValueTime();
-
-				valueSerializer.serialize(valueTimeWrapper.value, target);
-				oos.writeLong(valueTimeWrapper.getTimestamp());
-
-				int edges = sharedBuffer.edges.size();
-				totalEdges += edges;
-
-				oos.writeInt(sharedBuffer.referenceCounter);
-			}
-		}
-
-		// write the edges between the shared buffer entries
-		oos.writeInt(totalEdges);
-
-		for (Map.Entry<K, SharedBufferPage<K, V>> pageEntry: pages.entrySet()) {
-			SharedBufferPage<K, V> page = pageEntry.getValue();
-
-			for (Map.Entry<ValueTimeWrapper<V>, SharedBufferEntry<K, V>> sharedBufferEntry: page.entries.entrySet()) {
-				SharedBufferEntry<K, V> sharedBuffer = sharedBufferEntry.getValue();
-
-				if (!entryIDs.containsKey(sharedBuffer)) {
-					throw new RuntimeException("Could not find id for entry: " + sharedBuffer);
-				} else {
-					int id = entryIDs.get(sharedBuffer);
-
-					for (SharedBufferEdge<K, V> edge: sharedBuffer.edges) {
-						// in order to serialize the previous relation we simply serialize the ids
-						// of the source and target SharedBufferEntry
-						if (edge.target != null) {
-							if (!entryIDs.containsKey(edge.getTarget())) {
-								throw new RuntimeException("Could not find id for entry: " + edge.getTarget());
-							} else {
-								int targetId = entryIDs.get(edge.getTarget());
-
-								oos.writeInt(id);
-								oos.writeInt(targetId);
-								oos.writeObject(edge.version);
-							}
-						} else {
-							oos.writeInt(id);
-							oos.writeInt(-1);
-							oos.writeObject(edge.version);
-						}
-					}
-				}
-			}
-		}
-	}
-
-	private void readObject(ObjectInputStream ois) throws IOException, ClassNotFoundException {
-		DataInputViewStreamWrapper source = new DataInputViewStreamWrapper(ois);
-		ArrayList<SharedBufferEntry<K, V>> entryList = new ArrayList<>();
-		ois.defaultReadObject();
-
-		this.pages = new HashMap<>();
-
-		int numberPages = ois.readInt();
-
-		for (int i = 0; i < numberPages; i++) {
-			// key of the page
-			@SuppressWarnings("unchecked")
-			K key = (K)ois.readObject();
-
-			SharedBufferPage<K, V> page = new SharedBufferPage<>(key);
-
-			pages.put(key, page);
-
-			int numberEntries = ois.readInt();
-
-			for (int j = 0; j < numberEntries; j++) {
-				// restore the SharedBufferEntries for the given page
-				V value = valueSerializer.deserialize(source);
-				long timestamp = ois.readLong();
-
-				ValueTimeWrapper<V> valueTimeWrapper = new ValueTimeWrapper<>(value, timestamp);
-				SharedBufferEntry<K, V> sharedBufferEntry = new SharedBufferEntry<K, V>(valueTimeWrapper, page);
-
-				sharedBufferEntry.referenceCounter = ois.readInt();
-
-				page.entries.put(valueTimeWrapper, sharedBufferEntry);
-
-				entryList.add(sharedBufferEntry);
-			}
-		}
-
-		// read the edges of the shared buffer entries
-		int numberEdges = ois.readInt();
-
-		for (int j = 0; j < numberEdges; j++) {
-			int sourceIndex = ois.readInt();
-			int targetIndex = ois.readInt();
-
-			if (sourceIndex >= entryList.size() || sourceIndex < 0) {
-				throw new RuntimeException("Could not find source entry with index " + sourceIndex +
-					". This indicates a corrupted state.");
-			} else {
-				// We've already deserialized the shared buffer entry. Simply read its ID and
-				// retrieve the buffer entry from the list of entries
-				SharedBufferEntry<K, V> sourceEntry = entryList.get(sourceIndex);
-
-				final DeweyNumber version = (DeweyNumber) ois.readObject();
-				final SharedBufferEntry<K, V> target;
-
-				if (targetIndex >= 0) {
-					if (targetIndex >= entryList.size()) {
-						throw new RuntimeException("Could not find target entry with index " + targetIndex +
-							". This indicates a corrupted state.");
-					} else {
-						target = entryList.get(targetIndex);
-					}
-				} else {
-					target = null;
-				}
-
-				sourceEntry.edges.add(new SharedBufferEdge<K, V>(target, version));
-			}
 		}
 	}
 
@@ -475,16 +377,12 @@ public class SharedBuffer<K extends Serializable, V> implements Serializable {
 	}
 
 	private SharedBufferEntry<K, V> get(
-		final K key,
-		final V value,
-		final long timestamp) {
-		if (pages.containsKey(key)) {
-			return pages
-				.get(key)
-				.get(new ValueTimeWrapper<V>(value, timestamp));
-		} else {
-			return null;
-		}
+			final K key,
+			final V value,
+			final long timestamp,
+			final int counter) {
+		SharedBufferPage<K, V> page = pages.get(key);
+		return page == null ? null : page.get(new ValueTimeWrapper<V>(value, timestamp, counter));
 	}
 
 	private void internalRemove(final SharedBufferEntry<K, V> entry) {
@@ -493,13 +391,13 @@ public class SharedBuffer<K extends Serializable, V> implements Serializable {
 
 		while (!entriesToRemove.isEmpty()) {
 			SharedBufferEntry<K, V> currentEntry = entriesToRemove.pop();
+			currentEntry.decreaseReferenceCounter();
 
 			if (currentEntry.getReferenceCounter() == 0) {
 				currentEntry.remove();
 
-				for (SharedBufferEdge<K, V> edge: currentEntry.getEdges()) {
+				for (SharedBufferEdge<K, V> edge : currentEntry.getEdges()) {
 					if (edge.getTarget() != null) {
-						edge.getTarget().decreaseReferenceCounter();
 						entriesToRemove.push(edge.getTarget());
 					}
 				}
@@ -511,7 +409,7 @@ public class SharedBuffer<K extends Serializable, V> implements Serializable {
 	public String toString() {
 		StringBuilder builder = new StringBuilder();
 
-		for(Map.Entry<K, SharedBufferPage<K, V>> entry :pages.entrySet()){
+		for (Map.Entry<K, SharedBufferPage<K, V>> entry : pages.entrySet()) {
 			builder.append("Key: ").append(entry.getKey()).append("\n");
 			builder.append("Value: ").append(entry.getValue()).append("\n");
 		}
@@ -525,7 +423,7 @@ public class SharedBuffer<K extends Serializable, V> implements Serializable {
 			@SuppressWarnings("unchecked")
 			SharedBuffer<K, V> other = (SharedBuffer<K, V>) obj;
 
-			return pages.equals(other.pages) && valueSerializer.equals(other.valueSerializer);
+			return pages.equals(other.pages) && getValueSerializer().equals(other.getValueSerializer());
 		} else {
 			return false;
 		}
@@ -533,7 +431,7 @@ public class SharedBuffer<K extends Serializable, V> implements Serializable {
 
 	@Override
 	public int hashCode() {
-		return Objects.hash(pages, valueSerializer);
+		return Objects.hash(pages, getValueSerializer());
 	}
 
 	/**
@@ -596,20 +494,25 @@ public class SharedBuffer<K extends Serializable, V> implements Serializable {
 		 * Removes all entries from the map whose timestamp is smaller than the pruning timestamp.
 		 *
 		 * @param pruningTimestamp Timestamp for the pruning
+		 * @return {@code true} if pruning happened
 		 */
-		public void prune(long pruningTimestamp) {
+		public boolean prune(long pruningTimestamp) {
 			Iterator<Map.Entry<ValueTimeWrapper<V>, SharedBufferEntry<K, V>>> iterator = entries.entrySet().iterator();
 			boolean continuePruning = true;
+			boolean pruned = false;
 
 			while (iterator.hasNext() && continuePruning) {
 				SharedBufferEntry<K, V> entry = iterator.next().getValue();
 
 				if (entry.getValueTime().getTimestamp() <= pruningTimestamp) {
 					iterator.remove();
+					pruned = true;
 				} else {
 					continuePruning = false;
 				}
 			}
+
+			return pruned;
 		}
 
 		public boolean isEmpty() {
@@ -662,21 +565,22 @@ public class SharedBuffer<K extends Serializable, V> implements Serializable {
 	 * @param <V> Type of the value
 	 */
 	private static class SharedBufferEntry<K, V> {
+
 		private final ValueTimeWrapper<V> valueTime;
 		private final Set<SharedBufferEdge<K, V>> edges;
 		private final SharedBufferPage<K, V> page;
 		private int referenceCounter;
 
-		public SharedBufferEntry(
-			final ValueTimeWrapper<V> valueTime,
-			final SharedBufferPage<K, V> page) {
+		SharedBufferEntry(
+				final ValueTimeWrapper<V> valueTime,
+				final SharedBufferPage<K, V> page) {
 			this(valueTime, null, page);
 		}
 
-		public SharedBufferEntry(
-			final ValueTimeWrapper<V> valueTime,
-			final SharedBufferEdge<K, V> edge,
-			final SharedBufferPage<K, V> page) {
+		SharedBufferEntry(
+				final ValueTimeWrapper<V> valueTime,
+				final SharedBufferEdge<K, V> edge,
+				final SharedBufferPage<K, V> page) {
 			this.valueTime = valueTime;
 			edges = new HashSet<>();
 
@@ -756,7 +660,7 @@ public class SharedBuffer<K extends Serializable, V> implements Serializable {
 	}
 
 	/**
-	 * Versioned edge between two shared buffer entries
+	 * Versioned edge between two shared buffer entries.
 	 *
 	 * @param <K> Type of the key
 	 * @param <V> Type of the value
@@ -817,17 +721,29 @@ public class SharedBuffer<K extends Serializable, V> implements Serializable {
 	}
 
 	/**
-	 * Wrapper for a value timestamp pair.
+	 * Wrapper for a value-timestamp pair.
 	 *
 	 * @param <V> Type of the value
 	 */
 	static class ValueTimeWrapper<V> {
+
 		private final V value;
 		private final long timestamp;
+		private final int counter;
 
-		public ValueTimeWrapper(final V value, final long timestamp) {
+		ValueTimeWrapper(final V value, final long timestamp, final int counter) {
 			this.value = value;
 			this.timestamp = timestamp;
+			this.counter = counter;
+		}
+
+		/**
+		 * Returns a counter used to disambiguate between different accepted
+		 * elements with the same value and timestamp that refer to the same
+		 * looping state.
+		 */
+		public int getCounter() {
+			return counter;
 		}
 
 		public V getValue() {
@@ -840,16 +756,16 @@ public class SharedBuffer<K extends Serializable, V> implements Serializable {
 
 		@Override
 		public String toString() {
-			return "ValueTimeWrapper(" + value + ", " + timestamp + ")";
+			return "ValueTimeWrapper(" + value + ", " + timestamp + ", " + counter + ")";
 		}
 
 		@Override
 		public boolean equals(Object obj) {
 			if (obj instanceof ValueTimeWrapper) {
 				@SuppressWarnings("unchecked")
-				ValueTimeWrapper<V> other = (ValueTimeWrapper<V>)obj;
+				ValueTimeWrapper<V> other = (ValueTimeWrapper<V>) obj;
 
-				return timestamp == other.getTimestamp() && value.equals(other.getValue());
+				return timestamp == other.getTimestamp() && value.equals(other.getValue()) && counter == other.getCounter();
 			} else {
 				return false;
 			}
@@ -857,7 +773,7 @@ public class SharedBuffer<K extends Serializable, V> implements Serializable {
 
 		@Override
 		public int hashCode() {
-			return (int) (this.timestamp ^ this.timestamp >>> 32) + 31 * value.hashCode();
+			return (int) (31 * (31 * (timestamp ^ timestamp >>> 32) + value.hashCode()) + counter);
 		}
 	}
 
@@ -869,15 +785,15 @@ public class SharedBuffer<K extends Serializable, V> implements Serializable {
 	 * @param <V> Type of the value
 	 */
 	private static class ExtractionState<K, V> {
+
 		private final SharedBufferEntry<K, V> entry;
 		private final DeweyNumber version;
 		private final Stack<SharedBufferEntry<K, V>> path;
 
-		public ExtractionState(
-			final SharedBufferEntry<K, V> entry,
-			final DeweyNumber version,
-			final Stack<SharedBufferEntry<K, V>> path) {
-
+		ExtractionState(
+				final SharedBufferEntry<K, V> entry,
+				final DeweyNumber version,
+				final Stack<SharedBufferEntry<K, V>> path) {
 			this.entry = entry;
 			this.version = version;
 			this.path = path;
@@ -898,6 +814,439 @@ public class SharedBuffer<K extends Serializable, V> implements Serializable {
 		@Override
 		public String toString() {
 			return "ExtractionState(" + entry + ", " + version + ", [" +  StringUtils.join(path, ", ") + "])";
+		}
+	}
+
+	//////////////				New Serialization				////////////////////
+
+	/**
+	 * The {@link TypeSerializerConfigSnapshot} serializer configuration to be stored with the managed state.
+	 */
+	public static final class SharedBufferSerializerConfigSnapshot<K, V> extends CompositeTypeSerializerConfigSnapshot {
+
+		private static final int VERSION = 1;
+
+		/** This empty constructor is required for deserializing the configuration. */
+		public SharedBufferSerializerConfigSnapshot() {}
+
+		public SharedBufferSerializerConfigSnapshot(
+				TypeSerializer<K> keySerializer,
+				TypeSerializer<V> valueSerializer,
+				TypeSerializer<DeweyNumber> versionSerializer) {
+
+			super(keySerializer, valueSerializer, versionSerializer);
+		}
+
+		@Override
+		public int getVersion() {
+			return VERSION;
+		}
+	}
+
+	/**
+	 * A {@link TypeSerializer} for the {@link SharedBuffer}.
+	 */
+	public static class SharedBufferSerializer<K extends Serializable, V> extends TypeSerializer<SharedBuffer<K, V>> {
+
+		private static final long serialVersionUID = -3254176794680331560L;
+
+		private final TypeSerializer<K> keySerializer;
+		private final TypeSerializer<V> valueSerializer;
+		private final TypeSerializer<DeweyNumber> versionSerializer;
+
+		public SharedBufferSerializer(
+				TypeSerializer<K> keySerializer,
+				TypeSerializer<V> valueSerializer) {
+			this(keySerializer, valueSerializer, new DeweyNumber.DeweyNumberSerializer());
+		}
+
+		public SharedBufferSerializer(
+				TypeSerializer<K> keySerializer,
+				TypeSerializer<V> valueSerializer,
+				TypeSerializer<DeweyNumber> versionSerializer) {
+
+			this.keySerializer = keySerializer;
+			this.valueSerializer = valueSerializer;
+			this.versionSerializer = versionSerializer;
+		}
+
+		@Override
+		public boolean isImmutableType() {
+			return false;
+		}
+
+		@Override
+		public TypeSerializer<SharedBuffer<K, V>> duplicate() {
+			return new SharedBufferSerializer<>(keySerializer, valueSerializer);
+		}
+
+		@Override
+		public SharedBuffer<K, V> createInstance() {
+			return new SharedBuffer<>(new NonDuplicatingTypeSerializer<V>(valueSerializer));
+		}
+
+		@Override
+		public SharedBuffer<K, V> copy(SharedBuffer from) {
+			try {
+				ByteArrayOutputStream baos = new ByteArrayOutputStream();
+				ObjectOutputStream oos = new ObjectOutputStream(baos);
+
+				serialize(from, new DataOutputViewStreamWrapper(oos));
+
+				oos.close();
+				baos.close();
+
+				byte[] data = baos.toByteArray();
+
+				ByteArrayInputStream bais = new ByteArrayInputStream(data);
+				ObjectInputStream ois = new ObjectInputStream(bais);
+
+				@SuppressWarnings("unchecked")
+				SharedBuffer<K, V> copy = deserialize(new DataInputViewStreamWrapper(ois));
+				ois.close();
+				bais.close();
+
+				return copy;
+			} catch (IOException e) {
+				throw new RuntimeException("Could not copy SharredBuffer.", e);
+			}
+		}
+
+		@Override
+		public SharedBuffer<K, V> copy(SharedBuffer from, SharedBuffer reuse) {
+			return copy(from);
+		}
+
+		@Override
+		public int getLength() {
+			return -1;
+		}
+
+		@Override
+		public void serialize(SharedBuffer record, DataOutputView target) throws IOException {
+			Map<K, SharedBufferPage<K, V>> pages = record.pages;
+			Map<SharedBufferEntry<K, V>, Integer> entryIDs = new HashMap<>();
+
+			int totalEdges = 0;
+			int entryCounter = 0;
+
+			// number of pages
+			target.writeInt(pages.size());
+
+			for (Map.Entry<K, SharedBufferPage<K, V>> pageEntry: pages.entrySet()) {
+				SharedBufferPage<K, V> page = pageEntry.getValue();
+
+				// key for the current page
+				keySerializer.serialize(page.getKey(), target);
+
+				// number of page entries
+				target.writeInt(page.entries.size());
+
+				for (Map.Entry<ValueTimeWrapper<V>, SharedBufferEntry<K, V>> sharedBufferEntry: page.entries.entrySet()) {
+					SharedBufferEntry<K, V> sharedBuffer = sharedBufferEntry.getValue();
+
+					// assign id to the sharedBufferEntry for the future
+					// serialization of the previous relation
+					entryIDs.put(sharedBuffer, entryCounter++);
+
+					ValueTimeWrapper<V> valueTimeWrapper = sharedBuffer.getValueTime();
+
+					valueSerializer.serialize(valueTimeWrapper.getValue(), target);
+					target.writeLong(valueTimeWrapper.getTimestamp());
+					target.writeInt(valueTimeWrapper.getCounter());
+
+					int edges = sharedBuffer.edges.size();
+					totalEdges += edges;
+
+					target.writeInt(sharedBuffer.referenceCounter);
+				}
+			}
+
+			// write the edges between the shared buffer entries
+			target.writeInt(totalEdges);
+
+			for (Map.Entry<K, SharedBufferPage<K, V>> pageEntry: pages.entrySet()) {
+				SharedBufferPage<K, V> page = pageEntry.getValue();
+
+				for (Map.Entry<ValueTimeWrapper<V>, SharedBufferEntry<K, V>> sharedBufferEntry: page.entries.entrySet()) {
+					SharedBufferEntry<K, V> sharedBuffer = sharedBufferEntry.getValue();
+
+					Integer id = entryIDs.get(sharedBuffer);
+					Preconditions.checkState(id != null, "Could not find id for entry: " + sharedBuffer);
+
+					for (SharedBufferEdge<K, V> edge: sharedBuffer.edges) {
+						// in order to serialize the previous relation we simply serialize the ids
+						// of the source and target SharedBufferEntry
+						if (edge.target != null) {
+							Integer targetId = entryIDs.get(edge.getTarget());
+							Preconditions.checkState(targetId != null,
+									"Could not find id for entry: " + edge.getTarget());
+
+							target.writeInt(id);
+							target.writeInt(targetId);
+							versionSerializer.serialize(edge.version, target);
+						} else {
+							target.writeInt(id);
+							target.writeInt(-1);
+							versionSerializer.serialize(edge.version, target);
+						}
+					}
+				}
+			}
+		}
+
+		@Override
+		public SharedBuffer deserialize(DataInputView source) throws IOException {
+			List<SharedBufferEntry<K, V>> entryList = new ArrayList<>();
+			Map<K, SharedBufferPage<K, V>> pages = new HashMap<>();
+
+			int totalPages = source.readInt();
+
+			for (int i = 0; i < totalPages; i++) {
+				// key of the page
+				@SuppressWarnings("unchecked")
+				K key = keySerializer.deserialize(source);
+
+				SharedBufferPage<K, V> page = new SharedBufferPage<>(key);
+
+				pages.put(key, page);
+
+				int numberEntries = source.readInt();
+
+				for (int j = 0; j < numberEntries; j++) {
+					// restore the SharedBufferEntries for the given page
+					V value = valueSerializer.deserialize(source);
+					long timestamp = source.readLong();
+					int counter = source.readInt();
+
+					ValueTimeWrapper<V> valueTimeWrapper = new ValueTimeWrapper<>(value, timestamp, counter);
+					SharedBufferEntry<K, V> sharedBufferEntry = new SharedBufferEntry<K, V>(valueTimeWrapper, page);
+
+					sharedBufferEntry.referenceCounter = source.readInt();
+
+					page.entries.put(valueTimeWrapper, sharedBufferEntry);
+
+					entryList.add(sharedBufferEntry);
+				}
+			}
+
+			// read the edges of the shared buffer entries
+			int totalEdges = source.readInt();
+
+			for (int j = 0; j < totalEdges; j++) {
+				int sourceIndex = source.readInt();
+				Preconditions.checkState(sourceIndex < entryList.size() && sourceIndex >= 0,
+						"Could not find source entry with index " + sourceIndex + 	". This indicates a corrupted state.");
+
+				int targetIndex = source.readInt();
+				Preconditions.checkState(targetIndex < entryList.size(),
+						"Could not find target entry with index " + sourceIndex + 	". This indicates a corrupted state.");
+
+				DeweyNumber version = versionSerializer.deserialize(source);
+
+				// We've already deserialized the shared buffer entry. Simply read its ID and
+				// retrieve the buffer entry from the list of entries
+				SharedBufferEntry<K, V> sourceEntry = entryList.get(sourceIndex);
+				SharedBufferEntry<K, V> targetEntry = targetIndex < 0 ? null : entryList.get(targetIndex);
+
+				sourceEntry.edges.add(new SharedBufferEdge<>(targetEntry, version));
+			}
+			// here we put the old NonDuplicating serializer because this needs to create a copy
+			// of the buffer, as created by the NFA. There, for compatibility reasons, we have left
+			// the old serializer.
+			return new SharedBuffer(new NonDuplicatingTypeSerializer(valueSerializer), pages);
+		}
+
+		@Override
+		public SharedBuffer deserialize(SharedBuffer reuse, DataInputView source) throws IOException {
+			return deserialize(source);
+		}
+
+		@Override
+		public void copy(DataInputView source, DataOutputView target) throws IOException {
+			int numberPages = source.readInt();
+			target.writeInt(numberPages);
+
+			for (int i = 0; i < numberPages; i++) {
+				// key of the page
+				@SuppressWarnings("unchecked")
+				K key = keySerializer.deserialize(source);
+				keySerializer.serialize(key, target);
+
+				int numberEntries = source.readInt();
+
+				for (int j = 0; j < numberEntries; j++) {
+					// restore the SharedBufferEntries for the given page
+					V value = valueSerializer.deserialize(source);
+					valueSerializer.serialize(value, target);
+
+					long timestamp = source.readLong();
+					target.writeLong(timestamp);
+
+					int counter = source.readInt();
+					target.writeInt(counter);
+
+					int referenceCounter = source.readInt();
+					target.writeInt(referenceCounter);
+				}
+			}
+
+			// read the edges of the shared buffer entries
+			int numberEdges = source.readInt();
+			target.writeInt(numberEdges);
+
+			for (int j = 0; j < numberEdges; j++) {
+				int sourceIndex = source.readInt();
+				int targetIndex = source.readInt();
+
+				target.writeInt(sourceIndex);
+				target.writeInt(targetIndex);
+
+				DeweyNumber version = versionSerializer.deserialize(source);
+				versionSerializer.serialize(version, target);
+			}
+		}
+
+		@Override
+		public boolean equals(Object obj) {
+			return obj == this ||
+					(obj != null && obj.getClass().equals(getClass()) &&
+							keySerializer.equals(((SharedBufferSerializer<?, ?>) obj).keySerializer) &&
+							valueSerializer.equals(((SharedBufferSerializer<?, ?>) obj).valueSerializer) &&
+							versionSerializer.equals(((SharedBufferSerializer<?, ?>) obj).versionSerializer));
+		}
+
+		@Override
+		public boolean canEqual(Object obj) {
+			return true;
+		}
+
+		@Override
+		public int hashCode() {
+			return 37 * keySerializer.hashCode() + valueSerializer.hashCode();
+		}
+
+		@Override
+		public TypeSerializerConfigSnapshot snapshotConfiguration() {
+			return new SharedBufferSerializerConfigSnapshot<>(
+					keySerializer,
+					valueSerializer,
+					versionSerializer);
+		}
+
+		@Override
+		public CompatibilityResult<SharedBuffer<K, V>> ensureCompatibility(TypeSerializerConfigSnapshot configSnapshot) {
+			if (configSnapshot instanceof SharedBufferSerializerConfigSnapshot) {
+				List<Tuple2<TypeSerializer<?>, TypeSerializerConfigSnapshot>> serializerConfigSnapshots =
+						((SharedBufferSerializerConfigSnapshot) configSnapshot).getNestedSerializersAndConfigs();
+
+				CompatibilityResult<K> keyCompatResult = CompatibilityUtil.resolveCompatibilityResult(
+						serializerConfigSnapshots.get(0).f0,
+						UnloadableDummyTypeSerializer.class,
+						serializerConfigSnapshots.get(0).f1,
+						keySerializer);
+
+				CompatibilityResult<V> valueCompatResult = CompatibilityUtil.resolveCompatibilityResult(
+						serializerConfigSnapshots.get(1).f0,
+						UnloadableDummyTypeSerializer.class,
+						serializerConfigSnapshots.get(1).f1,
+						valueSerializer);
+
+				CompatibilityResult<DeweyNumber> versionCompatResult = CompatibilityUtil.resolveCompatibilityResult(
+						serializerConfigSnapshots.get(2).f0,
+						UnloadableDummyTypeSerializer.class,
+						serializerConfigSnapshots.get(2).f1,
+						versionSerializer);
+
+				if (!keyCompatResult.isRequiresMigration() && !valueCompatResult.isRequiresMigration() && !versionCompatResult.isRequiresMigration()) {
+					return CompatibilityResult.compatible();
+				} else {
+					if (keyCompatResult.getConvertDeserializer() != null
+							&& valueCompatResult.getConvertDeserializer() != null
+							&& versionCompatResult.getConvertDeserializer() != null) {
+						return CompatibilityResult.requiresMigration(
+								new SharedBufferSerializer<>(
+										new TypeDeserializerAdapter<>(keyCompatResult.getConvertDeserializer()),
+										new TypeDeserializerAdapter<>(valueCompatResult.getConvertDeserializer()),
+										new TypeDeserializerAdapter<>(versionCompatResult.getConvertDeserializer())
+								));
+					}
+				}
+			}
+
+			return CompatibilityResult.requiresMigration();
+		}
+	}
+
+	//////////////////			Java Serialization methods for backwards compatibility			//////////////////
+
+	private void readObject(ObjectInputStream ois) throws IOException, ClassNotFoundException {
+		DataInputViewStreamWrapper source = new DataInputViewStreamWrapper(ois);
+		ArrayList<SharedBufferEntry<K, V>> entryList = new ArrayList<>();
+		ois.defaultReadObject();
+
+		this.pages = new HashMap<>();
+
+		int numberPages = ois.readInt();
+
+		for (int i = 0; i < numberPages; i++) {
+			// key of the page
+			@SuppressWarnings("unchecked")
+			K key = (K) ois.readObject();
+
+			SharedBufferPage<K, V> page = new SharedBufferPage<>(key);
+
+			pages.put(key, page);
+
+			int numberEntries = ois.readInt();
+
+			for (int j = 0; j < numberEntries; j++) {
+				// restore the SharedBufferEntries for the given page
+				V value = valueSerializer.deserialize(source);
+				long timestamp = ois.readLong();
+
+				ValueTimeWrapper<V> valueTimeWrapper = new ValueTimeWrapper<>(value, timestamp, 0);
+				SharedBufferEntry<K, V> sharedBufferEntry = new SharedBufferEntry<K, V>(valueTimeWrapper, page);
+
+				sharedBufferEntry.referenceCounter = ois.readInt();
+
+				page.entries.put(valueTimeWrapper, sharedBufferEntry);
+
+				entryList.add(sharedBufferEntry);
+			}
+		}
+
+		// read the edges of the shared buffer entries
+		int numberEdges = ois.readInt();
+
+		for (int j = 0; j < numberEdges; j++) {
+			int sourceIndex = ois.readInt();
+			int targetIndex = ois.readInt();
+
+			if (sourceIndex >= entryList.size() || sourceIndex < 0) {
+				throw new RuntimeException("Could not find source entry with index " + sourceIndex +
+						". This indicates a corrupted state.");
+			} else {
+				// We've already deserialized the shared buffer entry. Simply read its ID and
+				// retrieve the buffer entry from the list of entries
+				SharedBufferEntry<K, V> sourceEntry = entryList.get(sourceIndex);
+
+				final DeweyNumber version = (DeweyNumber) ois.readObject();
+				final SharedBufferEntry<K, V> target;
+
+				if (targetIndex >= 0) {
+					if (targetIndex >= entryList.size()) {
+						throw new RuntimeException("Could not find target entry with index " + targetIndex +
+								". This indicates a corrupted state.");
+					} else {
+						target = entryList.get(targetIndex);
+					}
+				} else {
+					target = null;
+				}
+
+				sourceEntry.edges.add(new SharedBufferEdge<K, V>(target, version));
+			}
 		}
 	}
 }

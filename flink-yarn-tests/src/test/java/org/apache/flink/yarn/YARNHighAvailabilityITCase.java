@@ -18,10 +18,7 @@
 
 package org.apache.flink.yarn;
 
-import akka.actor.ActorSystem;
-import akka.actor.PoisonPill;
-import akka.testkit.JavaTestKit;
-import org.apache.curator.test.TestingServer;
+import org.apache.flink.client.deployment.ClusterSpecification;
 import org.apache.flink.client.program.ClusterClient;
 import org.apache.flink.configuration.ConfigConstants;
 import org.apache.flink.configuration.Configuration;
@@ -29,13 +26,20 @@ import org.apache.flink.configuration.CoreOptions;
 import org.apache.flink.configuration.GlobalConfiguration;
 import org.apache.flink.configuration.HighAvailabilityOptions;
 import org.apache.flink.runtime.akka.AkkaUtils;
+import org.apache.flink.runtime.concurrent.Executors;
+import org.apache.flink.runtime.highavailability.HighAvailabilityServices;
+import org.apache.flink.runtime.highavailability.HighAvailabilityServicesUtils;
 import org.apache.flink.runtime.instance.ActorGateway;
 import org.apache.flink.runtime.instance.AkkaActorGateway;
-import org.apache.flink.runtime.leaderretrieval.LeaderRetrievalService;
 import org.apache.flink.runtime.messages.Acknowledge;
 import org.apache.flink.runtime.state.filesystem.FsStateBackendFactory;
 import org.apache.flink.runtime.testingUtils.TestingJobManagerMessages;
 import org.apache.flink.runtime.util.LeaderRetrievalUtils;
+
+import akka.actor.ActorSystem;
+import akka.actor.PoisonPill;
+import akka.testkit.JavaTestKit;
+import org.apache.curator.test.TestingServer;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.yarn.conf.YarnConfiguration;
 import org.junit.AfterClass;
@@ -44,19 +48,23 @@ import org.junit.BeforeClass;
 import org.junit.Rule;
 import org.junit.Test;
 import org.junit.rules.TemporaryFolder;
-import scala.concurrent.duration.FiniteDuration;
 
 import java.io.File;
 import java.util.Arrays;
 import java.util.concurrent.TimeUnit;
 
+import scala.concurrent.duration.FiniteDuration;
+
+/**
+ * Tests that verify correct HA behavior.
+ */
 public class YARNHighAvailabilityITCase extends YarnTestBase {
 
-	protected static TestingServer zkServer;
+	private static TestingServer zkServer;
 
-	protected static ActorSystem actorSystem;
+	private static ActorSystem actorSystem;
 
-	protected static final int numberApplicationAttempts = 10;
+	private static final int numberApplicationAttempts = 3;
 
 	@Rule
 	public TemporaryFolder temp = new TemporaryFolder();
@@ -73,15 +81,15 @@ public class YARNHighAvailabilityITCase extends YarnTestBase {
 			Assert.fail("Could not start ZooKeeper testing cluster.");
 		}
 
-		yarnConfiguration.set(YarnTestBase.TEST_CLUSTER_NAME_KEY, "flink-yarn-tests-ha");
-		yarnConfiguration.set(YarnConfiguration.RM_AM_MAX_ATTEMPTS, "" + numberApplicationAttempts);
+		YARN_CONFIGURATION.set(YarnTestBase.TEST_CLUSTER_NAME_KEY, "flink-yarn-tests-ha");
+		YARN_CONFIGURATION.set(YarnConfiguration.RM_AM_MAX_ATTEMPTS, "" + numberApplicationAttempts);
 
-		startYARNWithConfig(yarnConfiguration);
+		startYARNWithConfig(YARN_CONFIGURATION);
 	}
 
 	@AfterClass
 	public static void teardown() throws Exception {
-		if(zkServer != null) {
+		if (zkServer != null) {
 			zkServer.stop();
 		}
 
@@ -97,18 +105,13 @@ public class YARNHighAvailabilityITCase extends YarnTestBase {
 	@Test
 	public void testMultipleAMKill() throws Exception {
 		final int numberKillingAttempts = numberApplicationAttempts - 1;
-
-		TestingYarnClusterDescriptor flinkYarnClient = new TestingYarnClusterDescriptor();
+		String confDirPath = System.getenv(ConfigConstants.ENV_FLINK_CONF_DIR);
+		final Configuration configuration = GlobalConfiguration.loadConfiguration();
+		TestingYarnClusterDescriptor flinkYarnClient = new TestingYarnClusterDescriptor(configuration, confDirPath);
 
 		Assert.assertNotNull("unable to get yarn client", flinkYarnClient);
-		flinkYarnClient.setTaskManagerCount(1);
-		flinkYarnClient.setJobManagerMemory(768);
-		flinkYarnClient.setTaskManagerMemory(1024);
 		flinkYarnClient.setLocalJarPath(new Path(flinkUberjar.getAbsolutePath()));
 		flinkYarnClient.addShipFiles(Arrays.asList(flinkLibFolder.listFiles()));
-
-		String confDirPath = System.getenv(ConfigConstants.ENV_FLINK_CONF_DIR);
-		flinkYarnClient.setConfigurationDirectory(confDirPath);
 
 		String fsStateHandlePath = temp.getRoot().getPath();
 
@@ -116,21 +119,36 @@ public class YARNHighAvailabilityITCase extends YarnTestBase {
 		File configDirectory = new File(confDirPath);
 		GlobalConfiguration.loadConfiguration(configDirectory.getAbsolutePath());
 
-		flinkYarnClient.setFlinkConfiguration(GlobalConfiguration.loadConfiguration());
 		flinkYarnClient.setDynamicPropertiesEncoded("recovery.mode=zookeeper@@recovery.zookeeper.quorum=" +
 			zkServer.getConnectString() + "@@yarn.application-attempts=" + numberApplicationAttempts +
 			"@@" + CoreOptions.STATE_BACKEND + "=FILESYSTEM" +
 			"@@" + FsStateBackendFactory.CHECKPOINT_DIRECTORY_URI_CONF_KEY + "=" + fsStateHandlePath + "/checkpoints" +
 			"@@" + HighAvailabilityOptions.HA_STORAGE_PATH.key() + "=" + fsStateHandlePath + "/recovery");
-		flinkYarnClient.setConfigurationFilePath(new Path(confDirPath + File.separator + "flink-conf.yaml"));
 
 		ClusterClient yarnCluster = null;
 
 		final FiniteDuration timeout = new FiniteDuration(2, TimeUnit.MINUTES);
 
+		HighAvailabilityServices highAvailabilityServices = null;
+
+		final ClusterSpecification clusterSpecification = new ClusterSpecification.ClusterSpecificationBuilder()
+			.setMasterMemoryMB(768)
+			.setTaskManagerMemoryMB(1024)
+			.setNumberTaskManagers(1)
+			.setSlotsPerTaskManager(1)
+			.createClusterSpecification();
+
 		try {
-			yarnCluster = flinkYarnClient.deploy();
-			final Configuration config = yarnCluster.getFlinkConfiguration();
+			yarnCluster = flinkYarnClient.deploySessionCluster(clusterSpecification);
+
+			final ClusterClient finalYarnCluster = yarnCluster;
+
+			highAvailabilityServices = HighAvailabilityServicesUtils.createHighAvailabilityServices(
+				yarnCluster.getFlinkConfiguration(),
+				Executors.directExecutor(),
+				HighAvailabilityServicesUtils.AddressResolution.TRY_ADDRESS_RESOLUTION);
+
+			final HighAvailabilityServices finalHighAvailabilityServices = highAvailabilityServices;
 
 			new JavaTestKit(actorSystem) {{
 				for (int attempt = 0; attempt < numberKillingAttempts; attempt++) {
@@ -138,8 +156,10 @@ public class YARNHighAvailabilityITCase extends YarnTestBase {
 						@Override
 						protected void run() {
 							try {
-								LeaderRetrievalService lrs = LeaderRetrievalUtils.createLeaderRetrievalService(config);
-								ActorGateway gateway = LeaderRetrievalUtils.retrieveLeaderGateway(lrs, actorSystem, timeout);
+								ActorGateway gateway = LeaderRetrievalUtils.retrieveLeaderGateway(
+									finalHighAvailabilityServices.getJobManagerLeaderRetriever(HighAvailabilityServices.DEFAULT_JOB_ID),
+									actorSystem,
+									timeout);
 								ActorGateway selfGateway = new AkkaActorGateway(getRef(), gateway.leaderSessionID());
 
 								gateway.tell(new TestingJobManagerMessages.NotifyWhenAtLeastNumTaskManagerAreRegistered(1), selfGateway);
@@ -158,10 +178,13 @@ public class YARNHighAvailabilityITCase extends YarnTestBase {
 					@Override
 					protected void run() {
 						try {
-							LeaderRetrievalService lrs = LeaderRetrievalUtils.createLeaderRetrievalService(config);
-							ActorGateway gateway2 = LeaderRetrievalUtils.retrieveLeaderGateway(lrs, actorSystem, timeout);
-							ActorGateway selfGateway = new AkkaActorGateway(getRef(), gateway2.leaderSessionID());
-							gateway2.tell(new TestingJobManagerMessages.NotifyWhenAtLeastNumTaskManagerAreRegistered(1), selfGateway);
+							ActorGateway gateway = LeaderRetrievalUtils.retrieveLeaderGateway(
+								finalHighAvailabilityServices.getJobManagerLeaderRetriever(HighAvailabilityServices.DEFAULT_JOB_ID),
+								actorSystem,
+								timeout);
+							ActorGateway selfGateway = new AkkaActorGateway(getRef(), gateway.leaderSessionID());
+
+							gateway.tell(new TestingJobManagerMessages.NotifyWhenAtLeastNumTaskManagerAreRegistered(1), selfGateway);
 
 							expectMsgEquals(Acknowledge.get());
 						} catch (Exception e) {
@@ -174,6 +197,10 @@ public class YARNHighAvailabilityITCase extends YarnTestBase {
 		} finally {
 			if (yarnCluster != null) {
 				yarnCluster.shutdown();
+			}
+
+			if (highAvailabilityServices != null) {
+				highAvailabilityServices.closeAndCleanupAllData();
 			}
 		}
 	}

@@ -17,15 +17,17 @@
 # limitations under the License.
 ################################################################################
 
-# Start a Flink cluster in batch or streaming mode
-USAGE="Usage: start-cluster.sh [batch|streaming]"
-
-STREAMING_MODE=$1
-
 bin=`dirname "$0"`
 bin=`cd "$bin"; pwd`
 
 . "$bin"/config.sh
+
+FLIP6=$1
+CLUSTER_TYPE=cluster
+
+if [[ "$FLIP6" == "flip6" ]]; then
+    CLUSTER_TYPE=flip6
+fi
 
 # Start the JobManager instance(s)
 shopt -s nocasematch
@@ -38,26 +40,16 @@ if [[ $HIGH_AVAILABILITY == "zookeeper" ]]; then
     for ((i=0;i<${#MASTERS[@]};++i)); do
         master=${MASTERS[i]}
         webuiport=${WEBUIPORTS[i]}
-        ssh -n $FLINK_SSH_OPTS $master -- "nohup /bin/bash -l \"${FLINK_BIN_DIR}/jobmanager.sh\" start cluster ${master} ${webuiport} &"
+        ssh -n $FLINK_SSH_OPTS $master -- "nohup /bin/bash -l \"${FLINK_BIN_DIR}/jobmanager.sh\" start $CLUSTER_TYPE ${master} ${webuiport} &"
     done
 
 else
     echo "Starting cluster."
 
     # Start single JobManager on this machine
-    "$FLINK_BIN_DIR"/jobmanager.sh start cluster
+    "$FLINK_BIN_DIR"/jobmanager.sh start $CLUSTER_TYPE
 fi
 shopt -u nocasematch
 
-# Start TaskManager instance(s) using pdsh (Parallel Distributed Shell) when available
-readSlaves
-
-command -v pdsh >/dev/null 2>&1
-if [[ $? -ne 0 ]]; then
-    for slave in ${SLAVES[@]}; do
-        ssh -n $FLINK_SSH_OPTS $slave -- "nohup /bin/bash -l \"${FLINK_BIN_DIR}/taskmanager.sh\" start &"
-    done
-else
-    PDSH_SSH_ARGS="" PDSH_SSH_ARGS_APPEND="${FLINK_SSH_OPTS}" pdsh -w $(IFS=, ; echo "${SLAVES[*]}") \
-        "nohup /bin/bash -l \"${FLINK_BIN_DIR}/taskmanager.sh\" start"
-fi
+# Start TaskManager instance(s)
+TMSlaves start $FLIP6

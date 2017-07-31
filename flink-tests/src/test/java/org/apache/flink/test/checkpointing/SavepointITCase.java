@@ -18,11 +18,6 @@
 
 package org.apache.flink.test.checkpointing;
 
-import akka.actor.ActorRef;
-import akka.actor.ActorSystem;
-import akka.testkit.JavaTestKit;
-import com.google.common.collect.HashMultimap;
-import com.google.common.collect.Multimap;
 import org.apache.flink.api.common.JobID;
 import org.apache.flink.api.common.JobSubmissionResult;
 import org.apache.flink.api.common.functions.MapFunction;
@@ -32,28 +27,32 @@ import org.apache.flink.api.common.restartstrategy.RestartStrategies;
 import org.apache.flink.api.common.state.ValueState;
 import org.apache.flink.api.common.state.ValueStateDescriptor;
 import org.apache.flink.api.java.functions.KeySelector;
+import org.apache.flink.api.java.tuple.Tuple2;
 import org.apache.flink.configuration.ConfigConstants;
 import org.apache.flink.configuration.Configuration;
 import org.apache.flink.configuration.CoreOptions;
 import org.apache.flink.configuration.TaskManagerOptions;
 import org.apache.flink.core.testutils.OneShotLatch;
 import org.apache.flink.runtime.akka.AkkaUtils;
-import org.apache.flink.runtime.checkpoint.SubtaskState;
-import org.apache.flink.runtime.checkpoint.TaskState;
-import org.apache.flink.runtime.checkpoint.savepoint.SavepointV1;
+import org.apache.flink.runtime.checkpoint.OperatorState;
+import org.apache.flink.runtime.checkpoint.OperatorSubtaskState;
+import org.apache.flink.runtime.checkpoint.savepoint.SavepointV2;
 import org.apache.flink.runtime.client.JobExecutionException;
 import org.apache.flink.runtime.deployment.TaskDeploymentDescriptor;
+import org.apache.flink.runtime.executiongraph.ExecutionGraph;
+import org.apache.flink.runtime.executiongraph.ExecutionJobVertex;
 import org.apache.flink.runtime.executiongraph.TaskInformation;
 import org.apache.flink.runtime.instance.ActorGateway;
 import org.apache.flink.runtime.jobgraph.JobGraph;
 import org.apache.flink.runtime.jobgraph.JobVertex;
 import org.apache.flink.runtime.jobgraph.JobVertexID;
+import org.apache.flink.runtime.jobgraph.OperatorID;
 import org.apache.flink.runtime.jobgraph.SavepointRestoreSettings;
+import org.apache.flink.runtime.messages.JobManagerMessages;
 import org.apache.flink.runtime.messages.JobManagerMessages.CancelJob;
 import org.apache.flink.runtime.messages.JobManagerMessages.DisposeSavepoint;
 import org.apache.flink.runtime.messages.JobManagerMessages.TriggerSavepoint;
 import org.apache.flink.runtime.messages.JobManagerMessages.TriggerSavepointSuccess;
-import org.apache.flink.runtime.state.ChainedStateHandle;
 import org.apache.flink.runtime.state.StreamStateHandle;
 import org.apache.flink.runtime.state.filesystem.FileStateHandle;
 import org.apache.flink.runtime.state.filesystem.FsStateBackend;
@@ -64,7 +63,6 @@ import org.apache.flink.runtime.testingUtils.TestingJobManagerMessages.ResponseS
 import org.apache.flink.runtime.testingUtils.TestingJobManagerMessages.WaitForAllVerticesToBeRunning;
 import org.apache.flink.runtime.testingUtils.TestingTaskManagerMessages;
 import org.apache.flink.runtime.testingUtils.TestingTaskManagerMessages.ResponseSubmitTaskListener;
-import org.apache.flink.runtime.testutils.CommonTestUtils;
 import org.apache.flink.streaming.api.checkpoint.ListCheckpointed;
 import org.apache.flink.streaming.api.datastream.DataStream;
 import org.apache.flink.streaming.api.datastream.IterativeStream;
@@ -75,17 +73,18 @@ import org.apache.flink.streaming.api.functions.source.SourceFunction;
 import org.apache.flink.streaming.api.graph.StreamGraph;
 import org.apache.flink.util.Collector;
 import org.apache.flink.util.TestLogger;
+
+import akka.actor.ActorRef;
+import akka.actor.ActorSystem;
+import akka.testkit.JavaTestKit;
+import com.google.common.collect.HashMultimap;
+import com.google.common.collect.Multimap;
 import org.junit.Assert;
 import org.junit.Rule;
 import org.junit.Test;
 import org.junit.rules.TemporaryFolder;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import scala.Option;
-import scala.concurrent.Await;
-import scala.concurrent.Future;
-import scala.concurrent.duration.Deadline;
-import scala.concurrent.duration.FiniteDuration;
 
 import java.io.File;
 import java.io.FileNotFoundException;
@@ -93,16 +92,23 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Random;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
+
+import scala.Option;
+import scala.concurrent.Await;
+import scala.concurrent.Future;
+import scala.concurrent.duration.Deadline;
+import scala.concurrent.duration.FiniteDuration;
 
 import static org.apache.flink.runtime.messages.JobManagerMessages.getDisposeSavepointSuccess;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
-import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
 
@@ -138,7 +144,7 @@ public class SavepointITCase extends TestLogger {
 		final int numSlotsPerTaskManager = 2;
 		final int parallelism = numTaskManagers * numSlotsPerTaskManager;
 		final Deadline deadline = new FiniteDuration(5, TimeUnit.MINUTES).fromNow();
-		final File testRoot = folder.newFolder();
+		final File testRoot = folder.getRoot();
 
 		TestingCluster flink = null;
 
@@ -162,7 +168,7 @@ public class SavepointITCase extends TestLogger {
 			config.setString(CoreOptions.STATE_BACKEND, "filesystem");
 			config.setString(FsStateBackendFactory.CHECKPOINT_DIRECTORY_URI_CONF_KEY, checkpointDir.toURI().toString());
 			config.setString(FsStateBackendFactory.MEMORY_THRESHOLD_CONF_KEY, "0");
-			config.setString(ConfigConstants.SAVEPOINT_DIRECTORY_KEY, savepointRootDir.toURI().toString());
+			config.setString(CoreOptions.SAVEPOINT_DIRECTORY, savepointRootDir.toURI().toString());
 
 			// Start Flink
 			flink = new TestingCluster(config);
@@ -200,7 +206,7 @@ public class SavepointITCase extends TestLogger {
 			LOG.info("Requesting the savepoint.");
 			Future<Object> savepointFuture = jobManager.ask(new RequestSavepoint(savepointPath), deadline.timeLeft());
 
-			SavepointV1 savepoint = (SavepointV1) ((ResponseSavepoint) Await.result(savepointFuture, deadline.timeLeft())).savepoint();
+			SavepointV2 savepoint = (SavepointV2) ((ResponseSavepoint) Await.result(savepointFuture, deadline.timeLeft())).savepoint();
 			LOG.info("Retrieved savepoint: " + savepointPath + ".");
 
 			// Shut down the Flink cluster (thereby canceling the job)
@@ -310,30 +316,43 @@ public class SavepointITCase extends TestLogger {
 				};
 			}};
 
+			ExecutionGraph graph = (ExecutionGraph) ((JobManagerMessages.JobFound) Await.result(jobManager.ask(new JobManagerMessages.RequestJob(jobId), deadline.timeLeft()), deadline.timeLeft())).executionGraph();
+
 			// - Verification START -------------------------------------------
 
 			String errMsg = "Error during gathering of TaskDeploymentDescriptors";
-			assertNull(errMsg, error[0]);
+			if (error[0] != null) {
+				throw new RuntimeException(error[0]);
+			}
+
+			Map<OperatorID, Tuple2<Integer, ExecutionJobVertex>> operatorToJobVertexMapping = new HashMap<>();
+			for (ExecutionJobVertex task : graph.getVerticesTopologically()) {
+				List<OperatorID> operatorIDs = task.getOperatorIDs();
+				for (int x = 0; x < operatorIDs.size(); x++) {
+					operatorToJobVertexMapping.put(operatorIDs.get(x), new Tuple2<>(x, task));
+				}
+			}
 
 			// Verify that all tasks, which are part of the savepoint
 			// have a matching task deployment descriptor.
-			for (TaskState taskState : savepoint.getTaskStates()) {
-				Collection<TaskDeploymentDescriptor> taskTdds = tdds.get(taskState.getJobVertexID());
+			for (OperatorState operatorState : savepoint.getOperatorStates()) {
+				Tuple2<Integer, ExecutionJobVertex> chainIndexAndJobVertex = operatorToJobVertexMapping.get(operatorState.getOperatorID());
+				Collection<TaskDeploymentDescriptor> taskTdds = tdds.get(chainIndexAndJobVertex.f1.getJobVertexId());
 
 				errMsg = "Missing task for savepoint state for operator "
-					+ taskState.getJobVertexID() + ".";
+					+ operatorState.getOperatorID() + ".";
 				assertTrue(errMsg, taskTdds.size() > 0);
 
-				assertEquals(taskState.getNumberCollectedStates(), taskTdds.size());
+				assertEquals(operatorState.getNumberCollectedStates(), taskTdds.size());
 
 				for (TaskDeploymentDescriptor tdd : taskTdds) {
-					SubtaskState subtaskState = taskState.getState(tdd.getSubtaskIndex());
+					OperatorSubtaskState subtaskState = operatorState.getState(tdd.getSubtaskIndex());
 
 					assertNotNull(subtaskState);
 
 					errMsg = "Initial operator state mismatch.";
 					assertEquals(errMsg, subtaskState.getLegacyOperatorState(),
-						tdd.getTaskStateHandles().getLegacyOperatorState());
+						tdd.getTaskStateHandles().getLegacyOperatorState().get(chainIndexAndJobVertex.f0));
 				}
 			}
 
@@ -360,15 +379,13 @@ public class SavepointITCase extends TestLogger {
 			// The checkpoint files
 			List<File> checkpointFiles = new ArrayList<>();
 
-			for (TaskState stateForTaskGroup : savepoint.getTaskStates()) {
-				for (SubtaskState subtaskState : stateForTaskGroup.getStates()) {
-					ChainedStateHandle<StreamStateHandle> streamTaskState = subtaskState.getLegacyOperatorState();
+			for (OperatorState stateForTaskGroup : savepoint.getOperatorStates()) {
+				for (OperatorSubtaskState subtaskState : stateForTaskGroup.getStates()) {
+					StreamStateHandle streamTaskState = subtaskState.getLegacyOperatorState();
 
-					for (int i = 0; i < streamTaskState.getLength(); i++) {
-						if (streamTaskState.get(i) != null) {
-							FileStateHandle fileStateHandle = (FileStateHandle) streamTaskState.get(i);
-							checkpointFiles.add(new File(fileStateHandle.getFilePath().toUri()));
-						}
+					if (streamTaskState != null) {
+						FileStateHandle fileStateHandle = (FileStateHandle) streamTaskState;
+						checkpointFiles.add(new File(fileStateHandle.getFilePath().toUri()));
 					}
 				}
 			}
@@ -408,7 +425,7 @@ public class SavepointITCase extends TestLogger {
 		// Test deadline
 		final Deadline deadline = new FiniteDuration(5, TimeUnit.MINUTES).fromNow();
 
-		final File tmpDir = CommonTestUtils.createTempDirectory();
+		final File tmpDir = folder.getRoot();
 		final File savepointDir = new File(tmpDir, "savepoints");
 
 		TestingCluster flink = null;
@@ -418,7 +435,7 @@ public class SavepointITCase extends TestLogger {
 			final Configuration config = new Configuration();
 			config.setInteger(ConfigConstants.LOCAL_NUMBER_TASK_MANAGER, numTaskManagers);
 			config.setInteger(ConfigConstants.TASK_MANAGER_NUM_TASK_SLOTS, numSlotsPerTaskManager);
-			config.setString(ConfigConstants.SAVEPOINT_DIRECTORY_KEY,
+			config.setString(CoreOptions.SAVEPOINT_DIRECTORY,
 				savepointDir.toURI().toString());
 
 			LOG.info("Flink configuration: " + config + ".");
@@ -464,7 +481,7 @@ public class SavepointITCase extends TestLogger {
 	/**
 	 * FLINK-5985
 	 *
-	 * This test ensures we can restore from a savepoint under modifications to the job graph that only concern
+	 * <p>This test ensures we can restore from a savepoint under modifications to the job graph that only concern
 	 * stateless operators.
 	 */
 	@Test
@@ -478,7 +495,7 @@ public class SavepointITCase extends TestLogger {
 		// Test deadline
 		final Deadline deadline = new FiniteDuration(5, TimeUnit.MINUTES).fromNow();
 
-		final File tmpDir = CommonTestUtils.createTempDirectory();
+		final File tmpDir = folder.getRoot();
 		final File savepointDir = new File(tmpDir, "savepoints");
 
 		TestingCluster flink = null;
@@ -488,7 +505,7 @@ public class SavepointITCase extends TestLogger {
 			final Configuration config = new Configuration();
 			config.setInteger(ConfigConstants.LOCAL_NUMBER_TASK_MANAGER, numTaskManagers);
 			config.setInteger(ConfigConstants.TASK_MANAGER_NUM_TASK_SLOTS, numSlotsPerTaskManager);
-			config.setString(ConfigConstants.SAVEPOINT_DIRECTORY_KEY,
+			config.setString(CoreOptions.SAVEPOINT_DIRECTORY,
 					savepointDir.toURI().toString());
 
 			LOG.info("Flink configuration: " + config + ".");
@@ -721,17 +738,17 @@ public class SavepointITCase extends TestLogger {
 	}
 
 	private static final int ITER_TEST_PARALLELISM = 1;
-	private static OneShotLatch[] ITER_TEST_SNAPSHOT_WAIT = new OneShotLatch[ITER_TEST_PARALLELISM];
-	private static OneShotLatch[] ITER_TEST_RESTORE_WAIT = new OneShotLatch[ITER_TEST_PARALLELISM];
-	private static int[] ITER_TEST_CHECKPOINT_VERIFY = new int[ITER_TEST_PARALLELISM];
+	private static OneShotLatch[] iterTestSnapshotWait = new OneShotLatch[ITER_TEST_PARALLELISM];
+	private static OneShotLatch[] iterTestRestoreWait = new OneShotLatch[ITER_TEST_PARALLELISM];
+	private static int[] iterTestCheckpointVerify = new int[ITER_TEST_PARALLELISM];
 
 	@Test
 	public void testSavepointForJobWithIteration() throws Exception {
 
 		for (int i = 0; i < ITER_TEST_PARALLELISM; ++i) {
-			ITER_TEST_SNAPSHOT_WAIT[i] = new OneShotLatch();
-			ITER_TEST_RESTORE_WAIT[i] = new OneShotLatch();
-			ITER_TEST_CHECKPOINT_VERIFY[i] = 0;
+			iterTestSnapshotWait[i] = new OneShotLatch();
+			iterTestRestoreWait[i] = new OneShotLatch();
+			iterTestCheckpointVerify[i] = 0;
 		}
 
 		TemporaryFolder folder = new TemporaryFolder();
@@ -797,7 +814,7 @@ public class SavepointITCase extends TestLogger {
 		config.setString(FsStateBackendFactory.CHECKPOINT_DIRECTORY_URI_CONF_KEY,
 				checkpointDir.toURI().toString());
 		config.setString(FsStateBackendFactory.MEMORY_THRESHOLD_CONF_KEY, "0");
-		config.setString(ConfigConstants.SAVEPOINT_DIRECTORY_KEY,
+		config.setString(CoreOptions.SAVEPOINT_DIRECTORY,
 				savepointDir.toURI().toString());
 
 		TestingCluster cluster = new TestingCluster(config, false);
@@ -806,7 +823,7 @@ public class SavepointITCase extends TestLogger {
 			cluster.start();
 
 			cluster.submitJobDetached(jobGraph);
-			for (OneShotLatch latch : ITER_TEST_SNAPSHOT_WAIT) {
+			for (OneShotLatch latch : iterTestSnapshotWait) {
 				latch.await();
 			}
 			savepointPath = cluster.triggerSavepoint(jobGraph.getJobID());
@@ -816,7 +833,7 @@ public class SavepointITCase extends TestLogger {
 			jobGraph.setSavepointRestoreSettings(SavepointRestoreSettings.forPath(savepointPath));
 
 			cluster.submitJobDetached(jobGraph);
-			for (OneShotLatch latch : ITER_TEST_RESTORE_WAIT) {
+			for (OneShotLatch latch : iterTestRestoreWait) {
 				latch.await();
 			}
 			source.cancel();
@@ -868,7 +885,7 @@ public class SavepointITCase extends TestLogger {
 
 		@Override
 		public List<Integer> snapshotState(long checkpointId, long timestamp) throws Exception {
-			ITER_TEST_CHECKPOINT_VERIFY[getRuntimeContext().getIndexOfThisSubtask()] = emittedCount;
+			iterTestCheckpointVerify[getRuntimeContext().getIndexOfThisSubtask()] = emittedCount;
 			return Collections.singletonList(emittedCount);
 		}
 
@@ -877,20 +894,20 @@ public class SavepointITCase extends TestLogger {
 			if (!state.isEmpty()) {
 				this.emittedCount = state.get(0);
 			}
-			Assert.assertEquals(ITER_TEST_CHECKPOINT_VERIFY[getRuntimeContext().getIndexOfThisSubtask()], emittedCount);
-			ITER_TEST_RESTORE_WAIT[getRuntimeContext().getIndexOfThisSubtask()].trigger();
+			Assert.assertEquals(iterTestCheckpointVerify[getRuntimeContext().getIndexOfThisSubtask()], emittedCount);
+			iterTestRestoreWait[getRuntimeContext().getIndexOfThisSubtask()].trigger();
 		}
 	}
 
-	public static class DuplicateFilter extends RichFlatMapFunction<Integer, Integer> {
+	private static class DuplicateFilter extends RichFlatMapFunction<Integer, Integer> {
 
-		static final ValueStateDescriptor<Boolean> descriptor = new ValueStateDescriptor<>("seen", Boolean.class, false);
+		static final ValueStateDescriptor<Boolean> DESCRIPTOR = new ValueStateDescriptor<>("seen", Boolean.class, false);
 		private static final long serialVersionUID = 1L;
 		private ValueState<Boolean> operatorState;
 
 		@Override
 		public void open(Configuration configuration) {
-			operatorState = this.getRuntimeContext().getState(descriptor);
+			operatorState = this.getRuntimeContext().getState(DESCRIPTOR);
 		}
 
 		@Override
@@ -901,7 +918,7 @@ public class SavepointITCase extends TestLogger {
 			}
 
 			if (30 == value) {
-				ITER_TEST_SNAPSHOT_WAIT[getRuntimeContext().getIndexOfThisSubtask()].trigger();
+				iterTestSnapshotWait[getRuntimeContext().getIndexOfThisSubtask()].trigger();
 			}
 		}
 	}

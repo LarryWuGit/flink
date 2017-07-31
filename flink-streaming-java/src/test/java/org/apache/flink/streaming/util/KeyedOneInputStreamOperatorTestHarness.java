@@ -15,6 +15,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 package org.apache.flink.streaming.util;
 
 import org.apache.flink.api.common.JobID;
@@ -25,19 +26,20 @@ import org.apache.flink.api.java.functions.KeySelector;
 import org.apache.flink.core.fs.FSDataInputStream;
 import org.apache.flink.runtime.checkpoint.CheckpointOptions;
 import org.apache.flink.runtime.checkpoint.StateAssignmentOperation;
+import org.apache.flink.runtime.execution.Environment;
 import org.apache.flink.runtime.state.AbstractKeyedStateBackend;
 import org.apache.flink.runtime.state.CheckpointStreamFactory;
 import org.apache.flink.runtime.state.KeyGroupRange;
-import org.apache.flink.runtime.state.KeyGroupsStateHandle;
 import org.apache.flink.runtime.state.KeyedStateBackend;
 import org.apache.flink.runtime.state.KeyedStateHandle;
-import org.apache.flink.runtime.state.heap.HeapKeyedStateBackend;
 import org.apache.flink.runtime.state.StreamStateHandle;
+import org.apache.flink.runtime.state.heap.HeapKeyedStateBackend;
 import org.apache.flink.runtime.state.memory.MemoryStateBackend;
 import org.apache.flink.streaming.api.operators.OneInputStreamOperator;
 import org.apache.flink.streaming.api.operators.StreamCheckpointedOperator;
 import org.apache.flink.streaming.runtime.tasks.OperatorStateHandles;
 import org.apache.flink.util.Migration;
+
 import org.mockito.invocation.InvocationOnMock;
 import org.mockito.stubbing.Answer;
 
@@ -84,12 +86,26 @@ public class KeyedOneInputStreamOperatorTestHarness<K, IN, OUT>
 		setupMockTaskCreateKeyedBackend();
 	}
 
-
 	public KeyedOneInputStreamOperatorTestHarness(
 			OneInputStreamOperator<IN, OUT> operator,
 			final KeySelector<IN, K> keySelector,
 			TypeInformation<K> keyType) throws Exception {
 		this(operator, keySelector, keyType, 1, 1, 0);
+	}
+
+	public KeyedOneInputStreamOperatorTestHarness(
+			final OneInputStreamOperator<IN, OUT> operator,
+			final  KeySelector<IN, K> keySelector,
+			final TypeInformation<K> keyType,
+			final Environment environment) throws Exception {
+
+		super(operator, environment);
+
+		ClosureCleaner.clean(keySelector, false);
+		config.setStatePartitioner(0, keySelector);
+		config.setStateKeySerializer(keyType.createSerializer(executionConfig));
+
+		setupMockTaskCreateKeyedBackend();
 	}
 
 	private void setupMockTaskCreateKeyedBackend() {
@@ -116,9 +132,7 @@ public class KeyedOneInputStreamOperatorTestHarness<K, IN, OUT>
 							keyGroupRange,
 							mockTask.getEnvironment().getTaskKvStateRegistry());
 
-					if (restoredKeyedState != null) {
-						keyedStateBackend.restore(restoredKeyedState);
-					}
+					keyedStateBackend.restore(restoredKeyedState);
 
 					return keyedStateBackend;
 				}
@@ -150,7 +164,7 @@ public class KeyedOneInputStreamOperatorTestHarness<K, IN, OUT>
 					timestamp,
 					streamFactory,
 					CheckpointOptions.forFullCheckpoint());
-			if(!keyedSnapshotRunnable.isDone()) {
+			if (!keyedSnapshotRunnable.isDone()) {
 				Thread runner = new Thread(keyedSnapshotRunnable);
 				runner.start();
 			}
@@ -182,7 +196,6 @@ public class KeyedOneInputStreamOperatorTestHarness<K, IN, OUT>
 			}
 		}
 	}
-
 
 	private static boolean hasMigrationHandles(Collection<KeyedStateHandle> allKeyGroupsHandles) {
 		for (KeyedStateHandle handle : allKeyGroupsHandles) {

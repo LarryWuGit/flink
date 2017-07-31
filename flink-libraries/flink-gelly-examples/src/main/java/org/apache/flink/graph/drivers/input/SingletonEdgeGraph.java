@@ -21,30 +21,20 @@ package org.apache.flink.graph.drivers.input;
 import org.apache.flink.api.java.ExecutionEnvironment;
 import org.apache.flink.graph.Graph;
 import org.apache.flink.graph.drivers.parameter.LongParameter;
-import org.apache.flink.graph.drivers.parameter.ParameterizedBase;
 import org.apache.flink.types.LongValue;
 import org.apache.flink.types.NullValue;
 
-import static org.apache.flink.api.common.ExecutionConfig.PARALLELISM_DEFAULT;
 import static org.apache.flink.graph.generator.PathGraph.MINIMUM_VERTEX_COUNT;
 
 /**
  * Generate a {@link org.apache.flink.graph.generator.SingletonEdgeGraph}.
  */
 public class SingletonEdgeGraph
-extends ParameterizedBase
-implements Input<LongValue, NullValue, NullValue> {
+extends GeneratedGraph {
 
 	private LongParameter vertexPairCount = new LongParameter(this, "vertex_pair_count")
-		.setMinimumValue(MINIMUM_VERTEX_COUNT);
-
-	private LongParameter littleParallelism = new LongParameter(this, "little_parallelism")
-		.setDefaultValue(PARALLELISM_DEFAULT);
-
-	@Override
-	public String getName() {
-		return SingletonEdgeGraph.class.getSimpleName();
-	}
+		.setMinimumValue(MINIMUM_VERTEX_COUNT)
+		.setMaximumValue(1L << 62);
 
 	@Override
 	public String getIdentity() {
@@ -52,9 +42,14 @@ implements Input<LongValue, NullValue, NullValue> {
 	}
 
 	@Override
+	protected long vertexCount() {
+		return 2 * vertexPairCount.getValue();
+	}
+
+	@Override
 	public Graph<LongValue, NullValue, NullValue> create(ExecutionEnvironment env) {
 		return new org.apache.flink.graph.generator.SingletonEdgeGraph(env, vertexPairCount.getValue())
-			.setParallelism(littleParallelism.getValue().intValue())
+			.setParallelism(parallelism.getValue().intValue())
 			.generate();
 	}
 }

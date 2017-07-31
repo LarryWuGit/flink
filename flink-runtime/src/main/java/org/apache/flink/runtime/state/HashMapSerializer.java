@@ -18,13 +18,22 @@
 
 package org.apache.flink.runtime.state;
 
+import org.apache.flink.annotation.Internal;
+import org.apache.flink.api.common.typeutils.CompatibilityResult;
+import org.apache.flink.api.common.typeutils.CompatibilityUtil;
+import org.apache.flink.api.common.typeutils.TypeDeserializerAdapter;
 import org.apache.flink.api.common.typeutils.TypeSerializer;
+import org.apache.flink.api.common.typeutils.TypeSerializerConfigSnapshot;
+import org.apache.flink.api.common.typeutils.UnloadableDummyTypeSerializer;
+import org.apache.flink.api.common.typeutils.base.MapSerializerConfigSnapshot;
+import org.apache.flink.api.java.tuple.Tuple2;
 import org.apache.flink.core.memory.DataInputView;
 import org.apache.flink.core.memory.DataOutputView;
 import org.apache.flink.util.Preconditions;
 
 import java.io.IOException;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 
 /**
@@ -38,7 +47,8 @@ import java.util.Map;
  * @param <K> The type of the keys in the map.
  * @param <V> The type of the values in the map.
  */
-public class HashMapSerializer<K, V> extends TypeSerializer<HashMap<K, V>> {
+@Internal
+public final class HashMapSerializer<K, V> extends TypeSerializer<HashMap<K, V>> {
 
 	private static final long serialVersionUID = -6885593032367050078L;
 	
@@ -189,5 +199,45 @@ public class HashMapSerializer<K, V> extends TypeSerializer<HashMap<K, V>> {
 	@Override
 	public int hashCode() {
 		return keySerializer.hashCode() * 31 + valueSerializer.hashCode();
+	}
+
+	// --------------------------------------------------------------------------------------------
+	// Serializer configuration snapshotting & compatibility
+	// --------------------------------------------------------------------------------------------
+
+	@Override
+	public TypeSerializerConfigSnapshot snapshotConfiguration() {
+		return new MapSerializerConfigSnapshot<>(keySerializer, valueSerializer);
+	}
+
+	@Override
+	public CompatibilityResult<HashMap<K, V>> ensureCompatibility(TypeSerializerConfigSnapshot configSnapshot) {
+		if (configSnapshot instanceof MapSerializerConfigSnapshot) {
+			List<Tuple2<TypeSerializer<?>, TypeSerializerConfigSnapshot>> previousKvSerializersAndConfigs =
+				((MapSerializerConfigSnapshot) configSnapshot).getNestedSerializersAndConfigs();
+
+			CompatibilityResult<K> keyCompatResult = CompatibilityUtil.resolveCompatibilityResult(
+					previousKvSerializersAndConfigs.get(0).f0,
+					UnloadableDummyTypeSerializer.class,
+					previousKvSerializersAndConfigs.get(0).f1,
+					keySerializer);
+
+			CompatibilityResult<V> valueCompatResult = CompatibilityUtil.resolveCompatibilityResult(
+					previousKvSerializersAndConfigs.get(1).f0,
+					UnloadableDummyTypeSerializer.class,
+					previousKvSerializersAndConfigs.get(1).f1,
+					valueSerializer);
+
+			if (!keyCompatResult.isRequiresMigration() && !valueCompatResult.isRequiresMigration()) {
+				return CompatibilityResult.compatible();
+			} else if (keyCompatResult.getConvertDeserializer() != null && valueCompatResult.getConvertDeserializer() != null) {
+				return CompatibilityResult.requiresMigration(
+					new HashMapSerializer<>(
+						new TypeDeserializerAdapter<>(keyCompatResult.getConvertDeserializer()),
+						new TypeDeserializerAdapter<>(valueCompatResult.getConvertDeserializer())));
+			}
+		}
+
+		return CompatibilityResult.requiresMigration();
 	}
 }

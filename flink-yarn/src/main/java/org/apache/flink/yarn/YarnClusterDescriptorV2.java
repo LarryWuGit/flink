@@ -15,20 +15,39 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 package org.apache.flink.yarn;
 
+import org.apache.flink.client.deployment.ClusterSpecification;
+import org.apache.flink.configuration.Configuration;
+import org.apache.flink.runtime.jobgraph.JobGraph;
+import org.apache.flink.yarn.entrypoint.YarnJobClusterEntrypoint;
+import org.apache.flink.yarn.entrypoint.YarnSessionClusterEntrypoint;
 
 /**
  * Implementation of {@link org.apache.flink.yarn.AbstractYarnClusterDescriptor} which is used to start the new application master for a job under flip-6.
  * This implementation is now however tricky, since YarnClusterDescriptorV2 is related YarnClusterClientV2, but AbstractYarnClusterDescriptor is related
- * to YarnClusterClient. We should let YarnClusterDescriptorV2 implements ClusterDescriptor<YarnClusterClientV2>.
+ * to YarnClusterClient. We should let YarnClusterDescriptorV2 implements ClusterDescriptor&lt;YarnClusterClientV2&gt;.
  * However, in order to use the code in AbstractYarnClusterDescriptor for setting environments and so on, we make YarnClusterDescriptorV2 as now.
  */
 public class YarnClusterDescriptorV2 extends AbstractYarnClusterDescriptor {
 
-	@Override
-	protected Class<?> getApplicationMasterClass() {
-		return YarnFlinkApplicationMasterRunner.class;
+	public YarnClusterDescriptorV2(Configuration flinkConfiguration, String configurationDirectory) {
+		super(flinkConfiguration, configurationDirectory);
 	}
 
+	@Override
+	protected String getYarnSessionClusterEntrypoint() {
+		return YarnSessionClusterEntrypoint.class.getName();
+	}
+
+	@Override
+	protected String getYarnJobClusterEntrypoint() {
+		return YarnJobClusterEntrypoint.class.getName();
+	}
+
+	@Override
+	public YarnClusterClient deployJobCluster(ClusterSpecification clusterSpecification, JobGraph jobGraph) {
+		throw new UnsupportedOperationException("Cannot yet deploy a per-job yarn cluster.");
+	}
 }

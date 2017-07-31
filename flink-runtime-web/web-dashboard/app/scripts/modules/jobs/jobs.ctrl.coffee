@@ -197,28 +197,21 @@ angular.module('flinkApp')
 # --------------------------------------
 
 .controller 'JobPlanSubtasksController', ($scope, JobsService) ->
+  $scope.aggregate = false
+
   getSubtasks = ->
-    JobsService.getSubtasks($scope.nodeid).then (data) ->
-      $scope.subtasks = data
+    if $scope.aggregate
+      JobsService.getTaskManagers($scope.nodeid).then (data) ->
+        $scope.taskmanagers = data
+    else
+      JobsService.getSubtasks($scope.nodeid).then (data) ->
+        $scope.subtasks = data
 
   if $scope.nodeid and (!$scope.vertex or !$scope.vertex.st)
     getSubtasks()
 
   $scope.$on 'reload', (event) ->
     getSubtasks() if $scope.nodeid
-
-# --------------------------------------
-
-.controller 'JobPlanTaskManagersController', ($scope, JobsService) ->
-  getTaskManagers = ->
-    JobsService.getTaskManagers($scope.nodeid).then (data) ->
-      $scope.taskmanagers = data
-
-  if $scope.nodeid and (!$scope.vertex or !$scope.vertex.st)
-    getTaskManagers()
-
-  $scope.$on 'reload', (event) ->
-    getTaskManagers() if $scope.nodeid
 
 # --------------------------------------
 
@@ -353,12 +346,22 @@ angular.module('flinkApp')
       $scope.vertex = data
 
     MetricsService.getAvailableMetrics($scope.jobid, $scope.nodeid).then (data) ->
-      $scope.availableMetrics = data
+      $scope.availableMetrics = data.sort(alphabeticalSortById)
       $scope.metrics = MetricsService.getMetricsSetup($scope.jobid, $scope.nodeid).names
 
       MetricsService.registerObserver($scope.jobid, $scope.nodeid, (data) ->
         $scope.$broadcast "metrics:data:update", data.timestamp, data.values
       )
+
+  alphabeticalSortById = (a, b) ->
+    A = a.id.toLowerCase()
+    B = b.id.toLowerCase()
+    if A < B
+      return -1
+    else if A > B
+      return 1
+    else
+      return 0
 
   $scope.dropped = (event, index, item, external, type) ->
 
@@ -383,6 +386,10 @@ angular.module('flinkApp')
 
   $scope.setMetricSize = (metric, size) ->
     MetricsService.setMetricSize($scope.jobid, $scope.nodeid, metric, size)
+    loadMetrics()
+
+  $scope.setMetricView = (metric, view) ->
+    MetricsService.setMetricView($scope.jobid, $scope.nodeid, metric, view)
     loadMetrics()
 
   $scope.getValues = (metric) ->

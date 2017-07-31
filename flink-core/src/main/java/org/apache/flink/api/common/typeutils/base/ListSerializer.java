@@ -19,7 +19,13 @@
 package org.apache.flink.api.common.typeutils.base;
 
 import org.apache.flink.annotation.Internal;
+import org.apache.flink.api.common.typeutils.CompatibilityResult;
+import org.apache.flink.api.common.typeutils.CompatibilityUtil;
+import org.apache.flink.api.common.typeutils.TypeDeserializerAdapter;
 import org.apache.flink.api.common.typeutils.TypeSerializer;
+import org.apache.flink.api.common.typeutils.TypeSerializerConfigSnapshot;
+import org.apache.flink.api.common.typeutils.UnloadableDummyTypeSerializer;
+import org.apache.flink.api.java.tuple.Tuple2;
 import org.apache.flink.core.memory.DataInputView;
 import org.apache.flink.core.memory.DataOutputView;
 
@@ -39,7 +45,7 @@ import static org.apache.flink.util.Preconditions.checkNotNull;
  * @param <T> The type of element in the list.
  */
 @Internal
-public class ListSerializer<T> extends TypeSerializer<List<T>> {
+public final class ListSerializer<T> extends TypeSerializer<List<T>> {
 
 	private static final long serialVersionUID = 1119562170939152304L;
 
@@ -79,7 +85,7 @@ public class ListSerializer<T> extends TypeSerializer<List<T>> {
 	@Override
 	public TypeSerializer<List<T>> duplicate() {
 		TypeSerializer<T> duplicateElement = elementSerializer.duplicate();
-		return duplicateElement == elementSerializer ? this : new ListSerializer<T>(duplicateElement);
+		return duplicateElement == elementSerializer ? this : new ListSerializer<>(duplicateElement);
 	}
 
 	@Override
@@ -126,7 +132,8 @@ public class ListSerializer<T> extends TypeSerializer<List<T>> {
 	@Override
 	public List<T> deserialize(DataInputView source) throws IOException {
 		final int size = source.readInt();
-		final List<T> list = new ArrayList<>(size);
+		// create new list with (size + 1) capacity to prevent expensive growth when a single element is added
+		final List<T> list = new ArrayList<>(size + 1);
 		for (int i = 0; i < size; i++) {
 			list.add(elementSerializer.deserialize(source));
 		}
@@ -165,5 +172,37 @@ public class ListSerializer<T> extends TypeSerializer<List<T>> {
 	@Override
 	public int hashCode() {
 		return elementSerializer.hashCode();
+	}
+
+	// --------------------------------------------------------------------------------------------
+	// Serializer configuration snapshotting & compatibility
+	// --------------------------------------------------------------------------------------------
+
+	@Override
+	public CollectionSerializerConfigSnapshot snapshotConfiguration() {
+		return new CollectionSerializerConfigSnapshot<>(elementSerializer);
+	}
+
+	@Override
+	public CompatibilityResult<List<T>> ensureCompatibility(TypeSerializerConfigSnapshot configSnapshot) {
+		if (configSnapshot instanceof CollectionSerializerConfigSnapshot) {
+			Tuple2<TypeSerializer<?>, TypeSerializerConfigSnapshot> previousElemSerializerAndConfig =
+				((CollectionSerializerConfigSnapshot) configSnapshot).getSingleNestedSerializerAndConfig();
+
+			CompatibilityResult<T> compatResult = CompatibilityUtil.resolveCompatibilityResult(
+					previousElemSerializerAndConfig.f0,
+					UnloadableDummyTypeSerializer.class,
+					previousElemSerializerAndConfig.f1,
+					elementSerializer);
+
+			if (!compatResult.isRequiresMigration()) {
+				return CompatibilityResult.compatible();
+			} else if (compatResult.getConvertDeserializer() != null) {
+				return CompatibilityResult.requiresMigration(
+					new ListSerializer<>(new TypeDeserializerAdapter<>(compatResult.getConvertDeserializer())));
+			}
+		}
+
+		return CompatibilityResult.requiresMigration();
 	}
 }

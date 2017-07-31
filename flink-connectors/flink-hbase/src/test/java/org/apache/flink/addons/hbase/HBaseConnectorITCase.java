@@ -17,12 +17,17 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 package org.apache.flink.addons.hbase;
 
 import org.apache.flink.api.common.functions.ReduceFunction;
 import org.apache.flink.api.java.DataSet;
 import org.apache.flink.api.java.ExecutionEnvironment;
+import org.apache.flink.api.java.ExecutionEnvironmentFactory;
+import org.apache.flink.api.java.LocalEnvironment;
 import org.apache.flink.api.java.tuple.Tuple1;
+import org.apache.flink.configuration.Configuration;
+import org.apache.flink.configuration.TaskManagerOptions;
 import org.apache.flink.table.api.Table;
 import org.apache.flink.table.api.TableConfig;
 import org.apache.flink.table.api.TableEnvironment;
@@ -30,12 +35,14 @@ import org.apache.flink.table.api.java.BatchTableEnvironment;
 import org.apache.flink.table.functions.ScalarFunction;
 import org.apache.flink.test.util.TestBaseUtils;
 import org.apache.flink.types.Row;
+
 import org.apache.hadoop.hbase.TableName;
 import org.apache.hadoop.hbase.client.HTable;
 import org.apache.hadoop.hbase.client.Put;
 import org.apache.hadoop.hbase.client.Result;
 import org.apache.hadoop.hbase.client.Scan;
 import org.apache.hadoop.hbase.util.Bytes;
+import org.junit.AfterClass;
 import org.junit.BeforeClass;
 import org.junit.Test;
 
@@ -50,7 +57,7 @@ import static org.junit.Assert.assertEquals;
  * - TableInputFormat
  * - HBaseTableSource
  *
- * These tests are located in a single test file to avoided unnecessary initializations of the
+ * <p>These tests are located in a single test file to avoided unnecessary initializations of the
  * HBaseTestingCluster which takes about half a minute.
  *
  */
@@ -74,6 +81,12 @@ public class HBaseConnectorITCase extends HBaseTestingClusterAutostarter {
 	public static void activateHBaseCluster() throws IOException {
 		registerHBaseMiniClusterInClasspath();
 		prepareTable();
+		LimitNetworkBuffersTestEnvironment.setAsContext();
+	}
+
+	@AfterClass
+	public static void resetExecutionEnvironmentFactory() {
+		LimitNetworkBuffersTestEnvironment.unsetAsContext();
 	}
 
 	private static void prepareTable() throws IOException {
@@ -279,6 +292,9 @@ public class HBaseConnectorITCase extends HBaseTestingClusterAutostarter {
 		TestBaseUtils.compareResultAsText(results, expected);
 	}
 
+	/**
+	 * A {@link ScalarFunction} that maps byte arrays to UTF-8 strings.
+	 */
 	public static class ToUTF8 extends ScalarFunction {
 
 		public String eval(byte[] bytes) {
@@ -286,6 +302,9 @@ public class HBaseConnectorITCase extends HBaseTestingClusterAutostarter {
 		}
 	}
 
+	/**
+	 * A {@link ScalarFunction} that maps byte array to longs.
+	 */
 	public static class ToLong extends ScalarFunction {
 
 		public long eval(byte[] bytes) {
@@ -331,8 +350,33 @@ public class HBaseConnectorITCase extends HBaseTestingClusterAutostarter {
 		List<Tuple1<Integer>> resultSet = result.collect();
 
 		assertEquals(1, resultSet.size());
-		assertEquals(360, (int)resultSet.get(0).f0);
+		assertEquals(360, (int) resultSet.get(0).f0);
 	}
 
+	/**
+	 * Allows the tests to use {@link ExecutionEnvironment#getExecutionEnvironment()} but with a
+	 * configuration that limits the maximum memory used for network buffers since the current
+	 * defaults are too high for Travis-CI.
+	 */
+	private abstract static class LimitNetworkBuffersTestEnvironment extends ExecutionEnvironment {
+
+		public static void setAsContext() {
+			Configuration config = new Configuration();
+			// the default network buffers size (10% of heap max =~ 150MB) seems to much for this test case
+			config.setLong(TaskManagerOptions.NETWORK_BUFFERS_MEMORY_MAX, 80L << 20); // 80 MB
+			final LocalEnvironment le = new LocalEnvironment(config);
+
+			initializeContextEnvironment(new ExecutionEnvironmentFactory() {
+				@Override
+				public ExecutionEnvironment createExecutionEnvironment() {
+					return le;
+				}
+			});
+		}
+
+		public static void unsetAsContext() {
+			resetContextEnvironment();
+		}
+	}
 
 }

@@ -19,16 +19,31 @@
 package org.apache.flink.graph.drivers;
 
 import org.apache.flink.client.program.ProgramParametrizationException;
+import org.apache.flink.graph.asm.dataset.ChecksumHashCode.Checksum;
+
+import org.apache.commons.lang3.ArrayUtils;
+import org.junit.Assume;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.junit.runners.Parameterized;
 
+/**
+ * Tests for {@link JaccardIndex}.
+ */
 @RunWith(Parameterized.class)
-public class JaccardIndexITCase
-extends DriverBaseITCase {
+public class JaccardIndexITCase extends CopyableValueDriverBaseITCase {
 
-	public JaccardIndexITCase(TestExecutionMode mode) {
-		super(mode);
+	public JaccardIndexITCase(String idType, TestExecutionMode mode) {
+		super(idType, mode);
+	}
+
+	private String[] parameters(int scale, String output, String... additionalParameters) {
+		String[] parameters = new String[] {
+			"--algorithm", "JaccardIndex", "--mirror_results",
+			"--input", "RMatGraph", "--scale", Integer.toString(scale), "--type", idType, "--simplify", "undirected",
+			"--output", output};
+
+		return ArrayUtils.addAll(parameters, additionalParameters);
 	}
 
 	@Test
@@ -42,22 +57,15 @@ extends DriverBaseITCase {
 	}
 
 	@Test
-	public void testHashWithRMatIntegerGraph() throws Exception {
-		String expected = "\nChecksumHashCode 0x0001b188570b2572, count 221628\n";
-
-		expectedOutput(
-			new String[]{"--algorithm", "JaccardIndex",
-				"--input", "RMatGraph", "--type", "integer", "--simplify", "undirected",
-				"--output", "hash"},
-			expected);
+	public void testHashWithRMatGraph() throws Exception {
+		expectedChecksum(parameters(8, "hash"), 39276, 0x00004caba2e663d5L);
 	}
 
 	@Test
-	public void testPrintWithRMatIntegerGraph() throws Exception {
-		expectedCount(
-			new String[]{"--algorithm", "JaccardIndex",
-				"--input", "RMatGraph", "--type", "integer", "--simplify", "undirected",
-				"--output", "print"},
-			221628);
+	public void testPrintWithRMatGraph() throws Exception {
+		// skip 'char' since it is not printed as a number
+		Assume.assumeFalse(idType.equals("char") || idType.equals("nativeChar"));
+
+		expectedOutputChecksum(parameters(8, "print"), new Checksum(39276, 0x00004c5a726220c0L));
 	}
 }

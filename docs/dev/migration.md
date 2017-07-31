@@ -25,6 +25,54 @@ under the License.
 * This will be replaced by the TOC
 {:toc}
 
+## Migrating from Flink 1.2 to Flink 1.3
+
+There are a few APIs that have been changed since Flink 1.2. Most of the changes are documented in their
+specific documentations. The following is a consolidated list of API changes and links to details for migration when
+upgrading to Flink 1.3.
+
+### `TypeSerializer` interface changes
+
+This would be relevant mostly for users implementing custom `TypeSerializer`s for their state.
+
+Since Flink 1.3, two additional methods have been added that are related to serializer compatibility
+across savepoint restores. Please see
+[Handling serializer upgrades and compatibility]({{ site.baseurl }}/dev/stream/state.html#handling-serializer-upgrades-and-compatibility)
+for further details on how to implement these methods.
+
+### `ProcessFunction` is always a `RichFunction`
+
+In Flink 1.2, `ProcessFunction` and its rich variant `RichProcessFunction` was introduced.
+Since Flink 1.3, `RichProcessFunction` was removed and `ProcessFunction` is now always a `RichFunction` with access to
+the lifecycle methods and runtime context.
+
+### Flink CEP library API changes
+
+The CEP library in Flink 1.3 ships with a number of new features which have led to some changes in the API.
+Please visit the [CEP Migration docs]({{ site.baseurl }}/dev/libs/cep.html#migrating-from-an-older-flink-version) for details.
+
+### Logger dependencies removed from Flink core artifacts
+
+In Flink 1.3, to make sure that users can use their own custom logging framework, core Flink artifacts are
+now clean of specific logger dependencies.
+ 
+Example and quickstart archtypes already have loggers specified and should not be affected.
+For other custom projects, make sure to add logger dependencies. For example, in Maven's `pom.xml`, you can add:
+
+~~~xml
+<dependency>
+    <groupId>org.slf4j</groupId>
+    <artifactId>slf4j-log4j12</artifactId>
+    <version>1.7.7</version>
+</dependency>
+
+<dependency>
+    <groupId>log4j</groupId>
+    <artifactId>log4j</artifactId>
+    <version>1.2.17</version>
+</dependency>
+~~~
+
 ## Migrating from Flink 1.1 to Flink 1.2
 
 As mentioned in the [State documentation]({{ site.baseurl }}/dev/stream/state.html), Flink has two types of state:
@@ -51,69 +99,70 @@ As running examples for the remainder of this document we will use the `CountMap
 functions. The first is an example of a function with **keyed** state, while
 the second has **non-keyed** state. The code for the aforementioned two functions in Flink 1.1 is presented below:
 
-    public class CountMapper extends RichFlatMapFunction<Tuple2<String, Integer>, Tuple2<String, Integer>> {
+{% highlight java %}
+public class CountMapper extends RichFlatMapFunction<Tuple2<String, Integer>, Tuple2<String, Integer>> {
 
-        private transient ValueState<Integer> counter;
+    private transient ValueState<Integer> counter;
 
-        private final int numberElements;
+    private final int numberElements;
 
-        public CountMapper(int numberElements) {
-            this.numberElements = numberElements;
-        }
-
-        @Override
-        public void open(Configuration parameters) throws Exception {
-            counter = getRuntimeContext().getState(
-      	        new ValueStateDescriptor<>("counter", Integer.class, 0));
-        }
-
-        @Override
-        public void flatMap(Tuple2<String, Integer> value, Collector<Tuple2<String, Integer>> out) throws Exception {
-            int count = counter.value() + 1;
-      	    counter.update(count);
-
-      	    if (count % numberElements == 0) {
-     		    out.collect(Tuple2.of(value.f0, count));
-     		    counter.update(0); // reset to 0
-     	    }
-        }
+    public CountMapper(int numberElements) {
+        this.numberElements = numberElements;
     }
 
+    @Override
+    public void open(Configuration parameters) throws Exception {
+        counter = getRuntimeContext().getState(
+            new ValueStateDescriptor<>("counter", Integer.class, 0));
+    }
 
-    public class BufferingSink implements SinkFunction<Tuple2<String, Integer>>,
-            Checkpointed<ArrayList<Tuple2<String, Integer>>> {
+    @Override
+    public void flatMap(Tuple2<String, Integer> value, Collector<Tuple2<String, Integer>> out) throws Exception {
+        int count = counter.value() + 1;
+        counter.update(count);
 
-	    private final int threshold;
-
-	    private ArrayList<Tuple2<String, Integer>> bufferedElements;
-
-	    BufferingSink(int threshold) {
-		    this.threshold = threshold;
-		    this.bufferedElements = new ArrayList<>();
-	    }
-
-    	@Override
-	    public void invoke(Tuple2<String, Integer> value) throws Exception {
-		    bufferedElements.add(value);
-		    if (bufferedElements.size() == threshold) {
-			    for (Tuple2<String, Integer> element: bufferedElements) {
-				    // send it to the sink
-			    }
-			    bufferedElements.clear();
-		    }
-	    }
-
-	    @Override
-	    public ArrayList<Tuple2<String, Integer>> snapshotState(
-	            long checkpointId, long checkpointTimestamp) throws Exception {
-		    return bufferedElements;
-	    }
-
-	    @Override
-	    public void restoreState(ArrayList<Tuple2<String, Integer>> state) throws Exception {
-	    	bufferedElements.addAll(state);
+        if (count % numberElements == 0) {
+            out.collect(Tuple2.of(value.f0, count));
+            counter.update(0); // reset to 0
         }
     }
+}
+
+public class BufferingSink implements SinkFunction<Tuple2<String, Integer>>,
+    Checkpointed<ArrayList<Tuple2<String, Integer>>> {
+
+    private final int threshold;
+
+    private ArrayList<Tuple2<String, Integer>> bufferedElements;
+
+    BufferingSink(int threshold) {
+        this.threshold = threshold;
+        this.bufferedElements = new ArrayList<>();
+    }
+
+    @Override
+    public void invoke(Tuple2<String, Integer> value) throws Exception {
+        bufferedElements.add(value);
+        if (bufferedElements.size() == threshold) {
+            for (Tuple2<String, Integer> element: bufferedElements) {
+	        // send it to the sink
+	    }
+	    bufferedElements.clear();
+	}
+    }
+
+    @Override
+    public ArrayList<Tuple2<String, Integer>> snapshotState(
+        long checkpointId, long checkpointTimestamp) throws Exception {
+	    return bufferedElements;
+    }
+
+    @Override
+    public void restoreState(ArrayList<Tuple2<String, Integer>> state) throws Exception {
+        bufferedElements.addAll(state);
+    }
+}
+{% endhighlight %}
 
 
 The `CountMapper` is a `RichFlatMapFuction` which assumes a grouped-by-key input stream of the form
@@ -160,9 +209,11 @@ the [State documentation]({{ site.baseurl }}/dev/stream/state.html).
 
 The `ListCheckpointed` interface requires the implementation of two methods:
 
-    List<T> snapshotState(long checkpointId, long timestamp) throws Exception;
+{% highlight java %}
+List<T> snapshotState(long checkpointId, long timestamp) throws Exception;
 
-    void restoreState(List<T> state) throws Exception;
+void restoreState(List<T> state) throws Exception;
+{% endhighlight %}
 
 Their semantics are the same as their counterparts in the old `Checkpointed` interface. The only difference
 is that now `snapshotState()` should return a list of objects to checkpoint, as stated earlier, and
@@ -170,52 +221,54 @@ is that now `snapshotState()` should return a list of objects to checkpoint, as 
 return a `Collections.singletonList(MY_STATE)` in the `snapshotState()`. The updated code for `BufferingSink`
 is included below:
 
-    public class BufferingSinkListCheckpointed implements
-            SinkFunction<Tuple2<String, Integer>>,
-            ListCheckpointed<Tuple2<String, Integer>>,
-            CheckpointedRestoring<ArrayList<Tuple2<String, Integer>>> {
+{% highlight java %}
+public class BufferingSinkListCheckpointed implements
+        SinkFunction<Tuple2<String, Integer>>,
+        ListCheckpointed<Tuple2<String, Integer>>,
+        CheckpointedRestoring<ArrayList<Tuple2<String, Integer>>> {
 
-        private final int threshold;
+    private final int threshold;
 
-        private transient ListState<Tuple2<String, Integer>> checkpointedState;
+    private transient ListState<Tuple2<String, Integer>> checkpointedState;
 
-        private List<Tuple2<String, Integer>> bufferedElements;
+    private List<Tuple2<String, Integer>> bufferedElements;
 
-        public BufferingSinkListCheckpointed(int threshold) {
-            this.threshold = threshold;
-            this.bufferedElements = new ArrayList<>();
-        }
+    public BufferingSinkListCheckpointed(int threshold) {
+        this.threshold = threshold;
+        this.bufferedElements = new ArrayList<>();
+    }
 
-        @Override
-        public void invoke(Tuple2<String, Integer> value) throws Exception {
-            this.bufferedElements.add(value);
-            if (bufferedElements.size() == threshold) {
-                for (Tuple2<String, Integer> element: bufferedElements) {
-                    // send it to the sink
-                }
-                bufferedElements.clear();
+    @Override
+    public void invoke(Tuple2<String, Integer> value) throws Exception {
+        this.bufferedElements.add(value);
+        if (bufferedElements.size() == threshold) {
+            for (Tuple2<String, Integer> element: bufferedElements) {
+                // send it to the sink
             }
+            bufferedElements.clear();
         }
+    }
 
-        @Override
-        public List<Tuple2<String, Integer>> snapshotState(
-                long checkpointId, long timestamp) throws Exception {
-            return this.bufferedElements;
-        }
+    @Override
+    public List<Tuple2<String, Integer>> snapshotState(
+            long checkpointId, long timestamp) throws Exception {
+        return this.bufferedElements;
+    }
 
-        @Override
-        public void restoreState(List<Tuple2<String, Integer>> state) throws Exception {
-            if (!state.isEmpty()) {
-                this.bufferedElements.addAll(state);
-            }
-        }
-
-        @Override
-        public void restoreState(ArrayList<Tuple2<String, Integer>> state) throws Exception {
-            // this is from the CheckpointedRestoring interface.
+    @Override
+    public void restoreState(List<Tuple2<String, Integer>> state) throws Exception {
+        if (!state.isEmpty()) {
             this.bufferedElements.addAll(state);
         }
     }
+
+    @Override
+    public void restoreState(ArrayList<Tuple2<String, Integer>> state) throws Exception {
+        // this is from the CheckpointedRestoring interface.
+        this.bufferedElements.addAll(state);
+    }
+}
+{% endhighlight %}
 
 As shown in the code, the updated function also implements the `CheckpointedRestoring` interface. This is for backwards
 compatibility reasons and more details will be explained at the end of this section.
@@ -224,9 +277,11 @@ compatibility reasons and more details will be explained at the end of this sect
 
 The `CheckpointedFunction` interface requires again the implementation of two methods:
 
-    void snapshotState(FunctionSnapshotContext context) throws Exception;
+{% highlight java %}
+void snapshotState(FunctionSnapshotContext context) throws Exception;
 
-    void initializeState(FunctionInitializationContext context) throws Exception;
+void initializeState(FunctionInitializationContext context) throws Exception;
+{% endhighlight %}
 
 As in Flink 1.1, `snapshotState()` is called whenever a checkpoint is performed, but now `initializeState()` (which is
 the counterpart of the `restoreState()`) is called every time the user-defined function is initialized, rather than only
@@ -234,57 +289,59 @@ in the case that we are recovering from a failure. Given this, `initializeState(
 types of state are initialized, but also where state recovery logic is included. An implementation of the
 `CheckpointedFunction` interface for `BufferingSink` is presented below.
 
-    public class BufferingSink implements SinkFunction<Tuple2<String, Integer>>,
-            CheckpointedFunction, CheckpointedRestoring<ArrayList<Tuple2<String, Integer>>> {
+{% highlight java %}
+public class BufferingSink implements SinkFunction<Tuple2<String, Integer>>,
+        CheckpointedFunction, CheckpointedRestoring<ArrayList<Tuple2<String, Integer>>> {
 
-        private final int threshold;
+    private final int threshold;
 
-        private transient ListState<Tuple2<String, Integer>> checkpointedState;
+    private transient ListState<Tuple2<String, Integer>> checkpointedState;
 
-        private List<Tuple2<String, Integer>> bufferedElements;
+    private List<Tuple2<String, Integer>> bufferedElements;
 
-        public BufferingSink(int threshold) {
-            this.threshold = threshold;
-            this.bufferedElements = new ArrayList<>();
-        }
+    public BufferingSink(int threshold) {
+        this.threshold = threshold;
+        this.bufferedElements = new ArrayList<>();
+    }
 
-        @Override
-        public void invoke(Tuple2<String, Integer> value) throws Exception {
-            bufferedElements.add(value);
-            if (bufferedElements.size() == threshold) {
-                for (Tuple2<String, Integer> element: bufferedElements) {
-                    // send it to the sink
-                }
-                bufferedElements.clear();
+    @Override
+    public void invoke(Tuple2<String, Integer> value) throws Exception {
+        bufferedElements.add(value);
+        if (bufferedElements.size() == threshold) {
+            for (Tuple2<String, Integer> element: bufferedElements) {
+                // send it to the sink
             }
-        }
-
-        @Override
-        public void snapshotState(FunctionSnapshotContext context) throws Exception {
-            checkpointedState.clear();
-            for (Tuple2<String, Integer> element : bufferedElements) {
-                checkpointedState.add(element);
-            }
-        }
-
-        @Override
-        public void initializeState(FunctionInitializationContext context) throws Exception {
-            checkpointedState = context.getOperatorStateStore().
-                getSerializableListState("buffered-elements");
-
-            if (context.isRestored()) {
-                for (Tuple2<String, Integer> element : checkpointedState.get()) {
-                    bufferedElements.add(element);
-                }
-            }
-        }
-
-        @Override
-        public void restoreState(ArrayList<Tuple2<String, Integer>> state) throws Exception {
-            // this is from the CheckpointedRestoring interface.
-            this.bufferedElements.addAll(state);
+            bufferedElements.clear();
         }
     }
+
+    @Override
+    public void snapshotState(FunctionSnapshotContext context) throws Exception {
+        checkpointedState.clear();
+        for (Tuple2<String, Integer> element : bufferedElements) {
+            checkpointedState.add(element);
+        }
+    }
+
+    @Override
+    public void initializeState(FunctionInitializationContext context) throws Exception {
+        checkpointedState = context.getOperatorStateStore().
+            getSerializableListState("buffered-elements");
+
+        if (context.isRestored()) {
+            for (Tuple2<String, Integer> element : checkpointedState.get()) {
+                bufferedElements.add(element);
+            }
+        }
+    }
+
+    @Override
+    public void restoreState(ArrayList<Tuple2<String, Integer>> state) throws Exception {
+        // this is from the CheckpointedRestoring interface.
+        this.bufferedElements.addAll(state);
+    }
+}
+{% endhighlight %}
 
 The `initializeState` takes as argument a `FunctionInitializationContext`. This is used to initialize
 the non-keyed state "container". This is a container of type `ListState` where the non-keyed state objects
@@ -305,40 +362,41 @@ for Flink 1.1. If the `CheckpointedFunction` interface was to be used in the `Co
 the old `open()` method could be removed and the new `snapshotState()` and `initializeState()` methods
 would look like this:
 
-    public class CountMapper extends RichFlatMapFunction<Tuple2<String, Integer>, Tuple2<String, Integer>>
-            implements CheckpointedFunction {
+{% highlight java %}
+public class CountMapper extends RichFlatMapFunction<Tuple2<String, Integer>, Tuple2<String, Integer>>
+        implements CheckpointedFunction {
 
-        private transient ValueState<Integer> counter;
+    private transient ValueState<Integer> counter;
 
-        private final int numberElements;
+    private final int numberElements;
 
-        public CountMapper(int numberElements) {
-            this.numberElements = numberElements;
-        }
+    public CountMapper(int numberElements) {
+        this.numberElements = numberElements;
+    }
 
-        @Override
-        public void flatMap(Tuple2<String, Integer> value, Collector<Tuple2<String, Integer>> out) throws Exception {
-            int count = counter.value() + 1;
-            counter.update(count);
+    @Override
+    public void flatMap(Tuple2<String, Integer> value, Collector<Tuple2<String, Integer>> out) throws Exception {
+        int count = counter.value() + 1;
+        counter.update(count);
 
-            if (count % numberElements == 0) {
-                out.collect(Tuple2.of(value.f0, count));
-             	counter.update(0); // reset to 0
-             	}
-            }
-        }
-
-        @Override
-        public void snapshotState(FunctionSnapshotContext context) throws Exception {
-            //all managed, nothing to do.
-        }
-
-        @Override
-        public void initializeState(FunctionInitializationContext context) throws Exception {
-            counter = context.getKeyedStateStore().getState(
-                new ValueStateDescriptor<>("counter", Integer.class, 0));
+        if (count % numberElements == 0) {
+            out.collect(Tuple2.of(value.f0, count));
+            counter.update(0); // reset to 0
         }
     }
+
+    @Override
+    public void snapshotState(FunctionSnapshotContext context) throws Exception {
+        // all managed, nothing to do.
+    }
+
+    @Override
+    public void initializeState(FunctionInitializationContext context) throws Exception {
+        counter = context.getKeyedStateStore().getState(
+            new ValueStateDescriptor<>("counter", Integer.class, 0));
+    }
+}
+{% endhighlight %}
 
 Notice that the `snapshotState()` method is empty as Flink itself takes care of snapshotting managed keyed state
 upon checkpointing.

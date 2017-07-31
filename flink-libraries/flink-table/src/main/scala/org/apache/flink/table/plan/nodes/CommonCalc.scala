@@ -19,49 +19,42 @@
 package org.apache.flink.table.plan.nodes
 
 import org.apache.calcite.plan.{RelOptCost, RelOptPlanner}
-import org.apache.calcite.rel.`type`.RelDataType
 import org.apache.calcite.rex._
-import org.apache.flink.api.common.functions.{FlatMapFunction, RichFlatMapFunction}
-import org.apache.flink.api.common.typeinfo.TypeInformation
+import org.apache.flink.api.common.functions.Function
 import org.apache.flink.table.api.TableConfig
-import org.apache.flink.table.calcite.FlinkTypeFactory
-import org.apache.flink.table.codegen.{CodeGenerator, GeneratedFunction}
-import org.apache.flink.table.runtime.FlatMapRunner
+import org.apache.flink.table.codegen.{FunctionCodeGenerator, GeneratedFunction}
+import org.apache.flink.table.plan.schema.RowSchema
 import org.apache.flink.types.Row
 
-import scala.collection.JavaConversions._
 import scala.collection.JavaConverters._
 
 trait CommonCalc {
 
-  private[flink] def functionBody(
-      generator: CodeGenerator,
-      inputType: TypeInformation[Row],
-      rowType: RelDataType,
-      calcProgram: RexProgram,
-      config: TableConfig)
-    : String = {
+  private[flink] def generateFunction[T <: Function](
+      generator: FunctionCodeGenerator,
+      ruleDescription: String,
+      inputSchema: RowSchema,
+      returnSchema: RowSchema,
+      calcProjection: Seq[RexNode],
+      calcCondition: Option[RexNode],
+      config: TableConfig,
+      functionClass: Class[T]):
+    GeneratedFunction[T, Row] = {
 
-    val returnType = FlinkTypeFactory.toInternalRowTypeInfo(rowType)
-
-    val condition = calcProgram.getCondition
-    val expandedExpressions = calcProgram.getProjectList.map(
-      expr => calcProgram.expandLocalRef(expr))
     val projection = generator.generateResultExpression(
-      returnType,
-      rowType.getFieldNames,
-      expandedExpressions)
+      returnSchema.physicalTypeInfo,
+      returnSchema.physicalFieldNames,
+      calcProjection)
 
     // only projection
-    if (condition == null) {
+    val body = if (calcCondition.isEmpty) {
       s"""
         |${projection.code}
         |${generator.collectorTerm}.collect(${projection.resultTerm});
         |""".stripMargin
     }
     else {
-      val filterCondition = generator.generateExpression(
-        calcProgram.expandLocalRef(calcProgram.getCondition))
+      val filterCondition = generator.generateExpression(calcCondition.get)
       // only filter
       if (projection == null) {
         s"""
@@ -82,16 +75,12 @@ trait CommonCalc {
           |""".stripMargin
       }
     }
-  }
 
-  private[flink] def calcMapFunction(
-      genFunction: GeneratedFunction[FlatMapFunction[Row, Row], Row])
-    : RichFlatMapFunction[Row, Row] = {
-
-    new FlatMapRunner[Row, Row](
-      genFunction.name,
-      genFunction.code,
-      genFunction.returnType)
+    generator.generateFunction(
+      ruleDescription,
+      functionClass,
+      body,
+      returnSchema.physicalTypeInfo)
   }
 
   private[flink] def conditionToString(
@@ -161,8 +150,8 @@ trait CommonCalc {
     // CASTs in RexProgram are reduced as far as possible by ReduceExpressionsRule
     // in normalization stage. So we should ignore CASTs here in optimization stage.
     val compCnt = calcProgram.getExprList.asScala.toList.count {
-      case i: RexInputRef => false
-      case l: RexLiteral => false
+      case _: RexInputRef => false
+      case _: RexLiteral => false
       case c: RexCall if c.getOperator.getName.equals("CAST") => false
       case _ => true
     }
@@ -177,7 +166,7 @@ trait CommonCalc {
 
     if (calcProgram.getCondition != null) {
       // we reduce the result card to push filters down
-      (rowCnt * 0.75).min(1.0)
+      (rowCnt * 0.75).max(1.0)
     } else {
       rowCnt
     }

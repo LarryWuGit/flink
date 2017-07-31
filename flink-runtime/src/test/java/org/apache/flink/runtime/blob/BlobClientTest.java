@@ -57,24 +57,18 @@ public class BlobClientTest {
 	 * Starts the BLOB server.
 	 */
 	@BeforeClass
-	public static void startServer() {
-		try {
-			blobServiceConfig = new Configuration();
-			BLOB_SERVER = new BlobServer(blobServiceConfig);
-		}
-		catch (IOException e) {
-			e.printStackTrace();
-			fail(e.getMessage());
-		}
+	public static void startServer() throws IOException {
+		blobServiceConfig = new Configuration();
+		BLOB_SERVER = new BlobServer(blobServiceConfig, new VoidBlobStore());
 	}
 
 	/**
 	 * Shuts the BLOB server down.
 	 */
 	@AfterClass
-	public static void stopServer() {
+	public static void stopServer() throws IOException {
 		if (BLOB_SERVER != null) {
-			BLOB_SERVER.shutdown();
+			BLOB_SERVER.close();
 		}
 	}
 
@@ -288,102 +282,6 @@ public class BlobClientTest {
 					client.close();
 				} catch (Throwable t) {}
 			}
-		}
-	}
-
-	/**
-	 * Tests the PUT/GET operations for regular (non-content-addressable) buffers.
-	 */
-	@Test
-	public void testRegularBuffer() {
-
-		final byte[] testBuffer = createTestBuffer();
-		final JobID jobID = JobID.generate();
-		final String key = "testkey";
-
-		try {
-			BlobClient client = null;
-			try {
-				final InetSocketAddress serverAddress = new InetSocketAddress("localhost", BLOB_SERVER.getPort());
-				client = new BlobClient(serverAddress, blobServiceConfig);
-
-				// Store the data
-				client.put(jobID, key, testBuffer);
-
-				// Retrieve the data
-				final InputStream is = client.get(jobID, key);
-				validateGet(is, testBuffer);
-
-				// Delete the data
-				client.delete(jobID, key);
-				
-				// Check if the BLOB is still available
-				try {
-					client.get(jobID, key);
-					fail("Expected IOException did not occur");
-				}
-				catch (IOException e) {
-					// expected
-				}
-			}
-			finally {
-				if (client != null) {
-					client.close();
-				}
-			}
-		}
-		catch (Exception e) {
-			e.printStackTrace();
-			fail(e.getMessage());
-		}
-	}
-
-	/**
-	 * Tests the PUT/GET operations for regular (non-content-addressable) streams.
-	 */
-	@Test
-	public void testRegularStream() {
-
-		final JobID jobID = JobID.generate();
-		final String key = "testkey3";
-
-		try {
-			final File testFile = File.createTempFile("testfile", ".dat");
-			testFile.deleteOnExit();
-			prepareTestFile(testFile);
-
-			BlobClient client = null;
-			InputStream is = null;
-			try {
-
-				final InetSocketAddress serverAddress = new InetSocketAddress("localhost", BLOB_SERVER.getPort());
-				client = new BlobClient(serverAddress, blobServiceConfig);
-
-				// Store the data
-				is = new FileInputStream(testFile);
-				client.put(jobID, key, is);
-
-				is.close();
-				is = null;
-
-				// Retrieve the data
-				is = client.get(jobID, key);
-				validateGet(is, testFile);
-
-			}
-			finally {
-				if (is != null) {
-					is.close();
-				}
-				if (client != null) {
-					client.close();
-				}
-			}
-
-		}
-		catch (Exception e) {
-			e.printStackTrace();
-			fail(e.getMessage());
 		}
 	}
 

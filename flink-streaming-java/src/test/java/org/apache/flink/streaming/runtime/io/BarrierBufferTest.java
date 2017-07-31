@@ -35,6 +35,7 @@ import org.apache.flink.runtime.io.network.buffer.FreeingBufferRecycler;
 import org.apache.flink.runtime.io.network.partition.consumer.BufferOrEvent;
 import org.apache.flink.runtime.jobgraph.tasks.StatefulTask;
 import org.apache.flink.runtime.state.TaskStateHandles;
+
 import org.hamcrest.BaseMatcher;
 import org.hamcrest.Description;
 import org.junit.AfterClass;
@@ -67,19 +68,19 @@ public class BarrierBufferTest {
 
 	private static final int PAGE_SIZE = 512;
 
-	private static int SIZE_COUNTER = 0;
+	private static int sizeCounter = 0;
 
-	private static IOManager IO_MANAGER;
+	private static IOManager ioManager;
 
 	@BeforeClass
 	public static void setup() {
-		IO_MANAGER = new IOManagerAsync();
-		SIZE_COUNTER = 1;
+		ioManager = new IOManagerAsync();
+		sizeCounter = 1;
 	}
 
 	@AfterClass
 	public static void shutdownIOManager() {
-		IO_MANAGER.shutdown();
+		ioManager.shutdown();
 	}
 
 	// ------------------------------------------------------------------------
@@ -93,13 +94,13 @@ public class BarrierBufferTest {
 	@Test
 	public void testSingleChannelNoBarriers() {
 		try {
-			BufferOrEvent[] sequence = { 
+			BufferOrEvent[] sequence = {
 					createBuffer(0), createBuffer(0), createBuffer(0),
 					createEndOfPartition(0)
 			};
 
 			MockInputGate gate = new MockInputGate(PAGE_SIZE, 1, Arrays.asList(sequence));
-			BarrierBuffer buffer = new BarrierBuffer(gate, IO_MANAGER);
+			BarrierBuffer buffer = new BarrierBuffer(gate, ioManager);
 
 			for (BufferOrEvent boe : sequence) {
 				assertEquals(boe, buffer.getNextNonBlocked());
@@ -109,7 +110,7 @@ public class BarrierBufferTest {
 
 			assertNull(buffer.getNextNonBlocked());
 			assertNull(buffer.getNextNonBlocked());
-			
+
 			buffer.cleanup();
 
 			checkNoTempFilesRemain();
@@ -134,7 +135,7 @@ public class BarrierBufferTest {
 			};
 
 			MockInputGate gate = new MockInputGate(PAGE_SIZE, 4, Arrays.asList(sequence));
-			BarrierBuffer buffer = new BarrierBuffer(gate, IO_MANAGER);
+			BarrierBuffer buffer = new BarrierBuffer(gate, ioManager);
 
 			for (BufferOrEvent boe : sequence) {
 				assertEquals(boe, buffer.getNextNonBlocked());
@@ -156,7 +157,7 @@ public class BarrierBufferTest {
 	}
 
 	/**
-	 * Validates that the buffer preserved the order of elements for a 
+	 * Validates that the buffer preserved the order of elements for a
 	 * input with a single input channel, and checkpoint events.
 	 */
 	@Test
@@ -173,12 +174,12 @@ public class BarrierBufferTest {
 			};
 
 			MockInputGate gate = new MockInputGate(PAGE_SIZE, 1, Arrays.asList(sequence));
-			BarrierBuffer buffer = new BarrierBuffer(gate, IO_MANAGER);
+			BarrierBuffer buffer = new BarrierBuffer(gate, ioManager);
 
 			ValidatingCheckpointHandler handler = new ValidatingCheckpointHandler();
 			buffer.registerCheckpointEventHandler(handler);
 			handler.setNextExpectedCheckpointId(1L);
-			
+
 			for (BufferOrEvent boe : sequence) {
 				if (boe.isBuffer() || boe.getEvent().getClass() != CheckpointBarrier.class) {
 					assertEquals(boe, buffer.getNextNonBlocked());
@@ -211,17 +212,17 @@ public class BarrierBufferTest {
 					createBarrier(1, 1), createBarrier(1, 2),
 					createBuffer(2), createBuffer(1), createBuffer(0),
 					createBarrier(1, 0),
-					
+
 					// checkpoint without blocked data
 					createBuffer(0), createBuffer(0), createBuffer(1), createBuffer(1), createBuffer(2),
 					createBarrier(2, 0), createBarrier(2, 1), createBarrier(2, 2),
-					
+
 					// checkpoint with data only from one channel
 					createBuffer(2), createBuffer(2),
 					createBarrier(3, 2),
 					createBuffer(2), createBuffer(2),
 					createBarrier(3, 0), createBarrier(3, 1),
-					
+
 					// empty checkpoint
 					createBarrier(4, 1), createBarrier(4, 2), createBarrier(4, 0),
 
@@ -232,14 +233,14 @@ public class BarrierBufferTest {
 					createBarrier(5, 2),
 					createBuffer(1), createBuffer(0), createBuffer(2), createBuffer(1),
 					createBarrier(5, 0),
-					
+
 					// some trailing data
 					createBuffer(0),
 					createEndOfPartition(0), createEndOfPartition(1), createEndOfPartition(2)
 			};
 
 			MockInputGate gate = new MockInputGate(PAGE_SIZE, 3, Arrays.asList(sequence));
-			BarrierBuffer buffer = new BarrierBuffer(gate, IO_MANAGER);
+			BarrierBuffer buffer = new BarrierBuffer(gate, ioManager);
 
 			ValidatingCheckpointHandler handler = new ValidatingCheckpointHandler();
 			buffer.registerCheckpointEventHandler(handler);
@@ -298,19 +299,19 @@ public class BarrierBufferTest {
 
 			check(sequence[28], buffer.getNextNonBlocked());
 			check(sequence[29], buffer.getNextNonBlocked());
-			
+
 			// checkpoint 5 aligning
 			check(sequence[31], buffer.getNextNonBlocked());
 			check(sequence[32], buffer.getNextNonBlocked());
 			check(sequence[33], buffer.getNextNonBlocked());
 			check(sequence[37], buffer.getNextNonBlocked());
-			
+
 			// buffered data from checkpoint 5 alignment
 			check(sequence[34], buffer.getNextNonBlocked());
 			check(sequence[36], buffer.getNextNonBlocked());
 			check(sequence[38], buffer.getNextNonBlocked());
 			check(sequence[39], buffer.getNextNonBlocked());
-			
+
 			// remaining data
 			check(sequence[41], buffer.getNextNonBlocked());
 			check(sequence[42], buffer.getNextNonBlocked());
@@ -348,7 +349,7 @@ public class BarrierBufferTest {
 			};
 
 			MockInputGate gate = new MockInputGate(PAGE_SIZE, 3, Arrays.asList(sequence));
-			BarrierBuffer buffer = new BarrierBuffer(gate, IO_MANAGER);
+			BarrierBuffer buffer = new BarrierBuffer(gate, ioManager);
 
 			ValidatingCheckpointHandler handler = new ValidatingCheckpointHandler();
 			buffer.registerCheckpointEventHandler(handler);
@@ -439,7 +440,7 @@ public class BarrierBufferTest {
 			};
 
 			MockInputGate gate = new MockInputGate(PAGE_SIZE, 3, Arrays.asList(sequence));
-			BarrierBuffer buffer = new BarrierBuffer(gate, IO_MANAGER);
+			BarrierBuffer buffer = new BarrierBuffer(gate, ioManager);
 
 			ValidatingCheckpointHandler handler = new ValidatingCheckpointHandler();
 			buffer.registerCheckpointEventHandler(handler);
@@ -450,7 +451,7 @@ public class BarrierBufferTest {
 			check(sequence[1], buffer.getNextNonBlocked());
 			check(sequence[2], buffer.getNextNonBlocked());
 			check(sequence[7], buffer.getNextNonBlocked());
-			
+
 			check(sequence[5], buffer.getNextNonBlocked());
 			assertEquals(2L, handler.getNextExpectedCheckpointId());
 			check(sequence[6], buffer.getNextNonBlocked());
@@ -477,7 +478,7 @@ public class BarrierBufferTest {
 			check(sequence[18], buffer.getNextNonBlocked());
 			check(sequence[19], buffer.getNextNonBlocked());
 			check(sequence[28], buffer.getNextNonBlocked());
-			
+
 			// past checkpoint 3
 			check(sequence[36], buffer.getNextNonBlocked());
 			check(sequence[38], buffer.getNextNonBlocked());
@@ -488,23 +489,23 @@ public class BarrierBufferTest {
 			check(sequence[31], buffer.getNextNonBlocked());
 			check(sequence[33], buffer.getNextNonBlocked());
 			check(sequence[39], buffer.getNextNonBlocked());
-			
+
 			// past checkpoint 4, alignment for checkpoint 5
 			check(sequence[42], buffer.getNextNonBlocked());
 			check(sequence[45], buffer.getNextNonBlocked());
 			check(sequence[46], buffer.getNextNonBlocked());
-			
+
 			// abort checkpoint 5 (end of partition)
 			check(sequence[37], buffer.getNextNonBlocked());
-			
+
 			// start checkpoint 6 alignment
 			check(sequence[47], buffer.getNextNonBlocked());
 			check(sequence[48], buffer.getNextNonBlocked());
-			
+
 			// end of input, emit remainder
 			check(sequence[43], buffer.getNextNonBlocked());
 			check(sequence[44], buffer.getNextNonBlocked());
-			
+
 			assertNull(buffer.getNextNonBlocked());
 			assertNull(buffer.getNextNonBlocked());
 
@@ -539,7 +540,7 @@ public class BarrierBufferTest {
 					createBarrier(2, 0),
 					createBuffer(2), createBuffer(0),
 					createBarrier(3, 2),
-					
+
 					createBuffer(2),
 					createBuffer(1), createEndOfPartition(1),
 					createBuffer(2), createEndOfPartition(2),
@@ -547,7 +548,7 @@ public class BarrierBufferTest {
 			};
 
 			MockInputGate gate = new MockInputGate(PAGE_SIZE, 3, Arrays.asList(sequence));
-			BarrierBuffer buffer = new BarrierBuffer(gate, IO_MANAGER);
+			BarrierBuffer buffer = new BarrierBuffer(gate, ioManager);
 
 			StatefulTask toNotify = mock(StatefulTask.class);
 			buffer.registerCheckpointEventHandler(toNotify);
@@ -603,7 +604,7 @@ public class BarrierBufferTest {
 
 			assertNull(buffer.getNextNonBlocked());
 			assertNull(buffer.getNextNonBlocked());
-			
+
 			buffer.cleanup();
 
 			checkNoTempFilesRemain();
@@ -647,7 +648,7 @@ public class BarrierBufferTest {
 			};
 
 			MockInputGate gate = new MockInputGate(PAGE_SIZE, 3, Arrays.asList(sequence));
-			BarrierBuffer buffer = new BarrierBuffer(gate, IO_MANAGER);
+			BarrierBuffer buffer = new BarrierBuffer(gate, ioManager);
 
 			ValidatingCheckpointHandler handler = new ValidatingCheckpointHandler();
 			buffer.registerCheckpointEventHandler(handler);
@@ -730,7 +731,7 @@ public class BarrierBufferTest {
 
 					createBarrier(3, 0), // queued barrier on blocked input
 					createBuffer(0),
-					
+
 					createBarrier(4, 1), // pre-mature barrier on blocked input
 					createBuffer(1),
 					createBuffer(0),
@@ -739,20 +740,20 @@ public class BarrierBufferTest {
 					// complete checkpoint 2
 					createBarrier(2, 2),
 					createBuffer(0),
-					
+
 					createBarrier(3, 2), // should be ignored
 					createBuffer(2),
 					createBarrier(4, 0),
 					createBuffer(0), createBuffer(1), createBuffer(2),
 					createBarrier(4, 2),
-					
+
 					createBuffer(1), createEndOfPartition(1),
 					createBuffer(2), createEndOfPartition(2),
 					createBuffer(0), createEndOfPartition(0)
 			};
 
 			MockInputGate gate = new MockInputGate(PAGE_SIZE, 3, Arrays.asList(sequence));
-			BarrierBuffer buffer = new BarrierBuffer(gate, IO_MANAGER);
+			BarrierBuffer buffer = new BarrierBuffer(gate, ioManager);
 
 			// checkpoint 1
 			check(sequence[0], buffer.getNextNonBlocked());
@@ -774,7 +775,7 @@ public class BarrierBufferTest {
 			check(sequence[12], buffer.getNextNonBlocked());
 			check(sequence[15], buffer.getNextNonBlocked());
 			check(sequence[16], buffer.getNextNonBlocked());
-			
+
 			// checkpoint 3 skipped, alignment for 4 started
 			check(sequence[18], buffer.getNextNonBlocked());
 			assertEquals(4L, buffer.getCurrentCheckpointId());
@@ -782,19 +783,19 @@ public class BarrierBufferTest {
 			check(sequence[24], buffer.getNextNonBlocked());
 			check(sequence[26], buffer.getNextNonBlocked());
 			check(sequence[30], buffer.getNextNonBlocked());
-			
+
 			// checkpoint 4 completed
 			check(sequence[20], buffer.getNextNonBlocked());
 			check(sequence[28], buffer.getNextNonBlocked());
 			check(sequence[29], buffer.getNextNonBlocked());
-			
+
 			check(sequence[32], buffer.getNextNonBlocked());
 			check(sequence[33], buffer.getNextNonBlocked());
 			check(sequence[34], buffer.getNextNonBlocked());
 			check(sequence[35], buffer.getNextNonBlocked());
 			check(sequence[36], buffer.getNextNonBlocked());
 			check(sequence[37], buffer.getNextNonBlocked());
-			
+
 			assertNull(buffer.getNextNonBlocked());
 			assertNull(buffer.getNextNonBlocked());
 
@@ -823,7 +824,7 @@ public class BarrierBufferTest {
 			};
 
 			MockInputGate gate = new MockInputGate(PAGE_SIZE, 3, Arrays.asList(sequence));
-			BarrierBuffer buffer = new BarrierBuffer(gate, IO_MANAGER);
+			BarrierBuffer buffer = new BarrierBuffer(gate, ioManager);
 
 			ValidatingCheckpointHandler handler = new ValidatingCheckpointHandler();
 			buffer.registerCheckpointEventHandler(handler);
@@ -858,12 +859,12 @@ public class BarrierBufferTest {
 			fail(e.getMessage());
 		}
 	}
-	
+
 	@Test
 	public void testStartAlignmentWithClosedChannels() {
 		try {
 			BufferOrEvent[] sequence = {
-					// close some channels immediately 
+					// close some channels immediately
 					createEndOfPartition(2), createEndOfPartition(1),
 
 					// checkpoint without blocked data
@@ -878,11 +879,11 @@ public class BarrierBufferTest {
 
 					// empty checkpoint
 					createBarrier(4, 0), createBarrier(4, 3),
-					
+
 					// some data, one channel closes
 					createBuffer(0), createBuffer(0), createBuffer(3),
 					createEndOfPartition(0),
-					
+
 					// checkpoint on last remaining channel
 					createBuffer(3),
 					createBarrier(5, 3),
@@ -891,9 +892,9 @@ public class BarrierBufferTest {
 			};
 
 			MockInputGate gate = new MockInputGate(PAGE_SIZE, 4, Arrays.asList(sequence));
-			
-			BarrierBuffer buffer = new BarrierBuffer(gate, IO_MANAGER);
-			
+
+			BarrierBuffer buffer = new BarrierBuffer(gate, ioManager);
+
 			// pre checkpoint 2
 			check(sequence[0], buffer.getNextNonBlocked());
 			check(sequence[1], buffer.getNextNonBlocked());
@@ -958,7 +959,7 @@ public class BarrierBufferTest {
 		};
 
 		MockInputGate gate = new MockInputGate(PAGE_SIZE, 3, Arrays.asList(sequence));
-		BarrierBuffer buffer = new BarrierBuffer(gate, IO_MANAGER);
+		BarrierBuffer buffer = new BarrierBuffer(gate, ioManager);
 
 		// data after first checkpoint
 		check(sequence[3], buffer.getNextNonBlocked());
@@ -1002,7 +1003,7 @@ public class BarrierBufferTest {
 		};
 
 		MockInputGate gate = new MockInputGate(PAGE_SIZE, 1, Arrays.asList(sequence));
-		BarrierBuffer buffer = new BarrierBuffer(gate, IO_MANAGER);
+		BarrierBuffer buffer = new BarrierBuffer(gate, ioManager);
 
 		StatefulTask toNotify = mock(StatefulTask.class);
 		buffer.registerCheckpointEventHandler(toNotify);
@@ -1023,7 +1024,7 @@ public class BarrierBufferTest {
 		assertEquals(6L, buffer.getCurrentCheckpointId());
 		verify(toNotify, times(1)).abortCheckpointOnBarrier(eq(6L), any(CheckpointDeclineOnCancellationBarrierException.class));
 		assertEquals(0L, buffer.getAlignmentDurationNanos());
-		
+
 		buffer.cleanup();
 		checkNoTempFilesRemain();
 	}
@@ -1066,7 +1067,7 @@ public class BarrierBufferTest {
 		};
 
 		MockInputGate gate = new MockInputGate(PAGE_SIZE, 3, Arrays.asList(sequence));
-		BarrierBuffer buffer = new BarrierBuffer(gate, IO_MANAGER);
+		BarrierBuffer buffer = new BarrierBuffer(gate, ioManager);
 
 		StatefulTask toNotify = mock(StatefulTask.class);
 		buffer.registerCheckpointEventHandler(toNotify);
@@ -1160,7 +1161,7 @@ public class BarrierBufferTest {
 		};
 
 		MockInputGate gate = new MockInputGate(PAGE_SIZE, 3, Arrays.asList(sequence));
-		BarrierBuffer buffer = new BarrierBuffer(gate, IO_MANAGER);
+		BarrierBuffer buffer = new BarrierBuffer(gate, ioManager);
 
 		StatefulTask toNotify = mock(StatefulTask.class);
 		buffer.registerCheckpointEventHandler(toNotify);
@@ -1214,7 +1215,7 @@ public class BarrierBufferTest {
 	 * This tests the where a replay of queued checkpoint barriers meets
 	 * a canceled checkpoint.
 	 *
-	 * The replayed newer checkpoint barrier must not try to cancel the
+	 * <p>The replayed newer checkpoint barrier must not try to cancel the
 	 * already canceled checkpoint.
 	 */
 	@Test
@@ -1251,7 +1252,7 @@ public class BarrierBufferTest {
 		};
 
 		MockInputGate gate = new MockInputGate(PAGE_SIZE, 3, Arrays.asList(sequence));
-		BarrierBuffer buffer = new BarrierBuffer(gate, IO_MANAGER);
+		BarrierBuffer buffer = new BarrierBuffer(gate, ioManager);
 
 		StatefulTask toNotify = mock(StatefulTask.class);
 		buffer.registerCheckpointEventHandler(toNotify);
@@ -1336,7 +1337,7 @@ public class BarrierBufferTest {
 		};
 
 		MockInputGate gate = new MockInputGate(PAGE_SIZE, 3, Arrays.asList(sequence));
-		BarrierBuffer buffer = new BarrierBuffer(gate, IO_MANAGER);
+		BarrierBuffer buffer = new BarrierBuffer(gate, ioManager);
 
 		StatefulTask toNotify = mock(StatefulTask.class);
 		buffer.registerCheckpointEventHandler(toNotify);
@@ -1398,7 +1399,7 @@ public class BarrierBufferTest {
 	}
 
 	private static BufferOrEvent createBuffer(int channel) {
-		final int size = SIZE_COUNTER++;
+		final int size = sizeCounter++;
 		byte[] bytes = new byte[size];
 		RND.nextBytes(bytes);
 
@@ -1417,12 +1418,12 @@ public class BarrierBufferTest {
 	private static BufferOrEvent createEndOfPartition(int channel) {
 		return new BufferOrEvent(EndOfPartitionEvent.INSTANCE, channel);
 	}
-	
+
 	private static void check(BufferOrEvent expected, BufferOrEvent present) {
 		assertNotNull(expected);
 		assertNotNull(present);
 		assertEquals(expected.isBuffer(), present.isBuffer());
-		
+
 		if (expected.isBuffer()) {
 			assertEquals(expected.getBuffer().getSize(), present.getBuffer().getSize());
 			MemorySegment expectedMem = expected.getBuffer().getMemorySegment();
@@ -1436,7 +1437,7 @@ public class BarrierBufferTest {
 
 	private static void checkNoTempFilesRemain() {
 		// validate that all temp files have been removed
-		for (File dir : IO_MANAGER.getSpillingDirectories()) {
+		for (File dir : ioManager.getSpillingDirectories()) {
 			for (String file : dir.list()) {
 				if (file != null && !(file.equals(".") || file.equals(".."))) {
 					fail("barrier buffer did not clean up temp files. remaining file: " + file);
@@ -1495,7 +1496,7 @@ public class BarrierBufferTest {
 		@Override
 		public void triggerCheckpointOnBarrier(CheckpointMetaData checkpointMetaData, CheckpointOptions checkpointOptions, CheckpointMetrics checkpointMetrics) throws Exception {
 			assertTrue("wrong checkpoint id",
-					nextExpectedCheckpointId == -1L || 
+					nextExpectedCheckpointId == -1L ||
 					nextExpectedCheckpointId == checkpointMetaData.getCheckpointId());
 
 			assertTrue(checkpointMetaData.getTimestamp() > 0);

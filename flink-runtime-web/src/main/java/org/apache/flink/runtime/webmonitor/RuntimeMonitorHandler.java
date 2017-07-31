@@ -18,6 +18,11 @@
 
 package org.apache.flink.runtime.webmonitor;
 
+import org.apache.flink.configuration.ConfigConstants;
+import org.apache.flink.runtime.instance.ActorGateway;
+import org.apache.flink.runtime.webmonitor.handlers.RequestHandler;
+import org.apache.flink.util.ExceptionUtils;
+
 import io.netty.buffer.ByteBuf;
 import io.netty.buffer.Unpooled;
 import io.netty.channel.ChannelHandler;
@@ -29,23 +34,17 @@ import io.netty.handler.codec.http.HttpResponseStatus;
 import io.netty.handler.codec.http.HttpVersion;
 import io.netty.handler.codec.http.router.KeepAliveWrite;
 import io.netty.handler.codec.http.router.Routed;
-
-import org.apache.flink.configuration.ConfigConstants;
-import org.apache.flink.runtime.instance.ActorGateway;
-import org.apache.flink.runtime.webmonitor.handlers.RequestHandler;
-import org.apache.flink.util.ExceptionUtils;
-
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-
-import scala.concurrent.Future;
-import scala.concurrent.duration.FiniteDuration;
 
 import java.net.InetSocketAddress;
 import java.net.URLDecoder;
 import java.nio.charset.Charset;
 import java.util.HashMap;
 import java.util.Map;
+
+import scala.concurrent.Future;
+import scala.concurrent.duration.FiniteDuration;
 
 import static org.apache.flink.util.Preconditions.checkNotNull;
 
@@ -66,14 +65,19 @@ public class RuntimeMonitorHandler extends RuntimeMonitorHandlerBase {
 
 	private final RequestHandler handler;
 
+	private final String allowOrigin;
+
 	public RuntimeMonitorHandler(
+			WebMonitorConfig cfg,
 			RequestHandler handler,
 			JobManagerRetriever retriever,
 			Future<String> localJobManagerAddressFuture,
 			FiniteDuration timeout,
 			boolean httpsEnabled) {
+
 		super(retriever, localJobManagerAddressFuture, timeout, httpsEnabled);
 		this.handler = checkNotNull(handler);
+		this.allowOrigin = cfg.getAllowOrigin();
 	}
 
 	@Override
@@ -108,7 +112,7 @@ public class RuntimeMonitorHandler extends RuntimeMonitorHandlerBase {
 			ByteBuf message = e.getMessage() == null ? Unpooled.buffer(0)
 					: Unpooled.wrappedBuffer(e.getMessage().getBytes(ENCODING));
 			response = new DefaultFullHttpResponse(HttpVersion.HTTP_1_1, HttpResponseStatus.NOT_FOUND, message);
-			response.headers().set(HttpHeaders.Names.CONTENT_TYPE, "text/plain");
+			response.headers().set(HttpHeaders.Names.CONTENT_TYPE, "text/plain; charset=" + ENCODING.name());
 			response.headers().set(HttpHeaders.Names.CONTENT_LENGTH, response.content().readableBytes());
 			LOG.debug("Error while handling request", e);
 		}
@@ -116,15 +120,13 @@ public class RuntimeMonitorHandler extends RuntimeMonitorHandlerBase {
 			byte[] bytes = ExceptionUtils.stringifyException(e).getBytes(ENCODING);
 			response = new DefaultFullHttpResponse(HttpVersion.HTTP_1_1,
 					HttpResponseStatus.INTERNAL_SERVER_ERROR, Unpooled.wrappedBuffer(bytes));
-			response.headers().set(HttpHeaders.Names.CONTENT_TYPE, "text/plain");
+			response.headers().set(HttpHeaders.Names.CONTENT_TYPE, "text/plain; charset=" + ENCODING.name());
 			response.headers().set(HttpHeaders.Names.CONTENT_LENGTH, response.content().readableBytes());
 
 			LOG.debug("Error while handling request", e);
 		}
 
-		response.headers().set(HttpHeaders.Names.ACCESS_CONTROL_ALLOW_ORIGIN, "*");
-		// Content-Encoding:utf-8
-		response.headers().set(HttpHeaders.Names.CONTENT_ENCODING, ENCODING.name());
+		response.headers().set(HttpHeaders.Names.ACCESS_CONTROL_ALLOW_ORIGIN, allowOrigin);
 
 		KeepAliveWrite.flush(ctx, routed.request(), response);
 	}

@@ -18,11 +18,12 @@
 
 package org.apache.flink.graph.drivers.parameter;
 
-import org.apache.commons.lang3.text.StrBuilder;
-import org.apache.commons.lang3.StringUtils;
 import org.apache.flink.api.java.utils.ParameterTool;
 import org.apache.flink.client.program.ProgramParametrizationException;
 import org.apache.flink.util.Preconditions;
+
+import org.apache.commons.lang3.StringUtils;
+import org.apache.commons.lang3.text.StrBuilder;
 
 import java.util.ArrayList;
 import java.util.Collections;
@@ -37,6 +38,8 @@ extends SimpleParameter<String> {
 
 	private List<String> choices = new ArrayList<>();
 
+	private List<String> hiddenChoices = new ArrayList<>();
+
 	/**
 	 * Set the parameter name and add this parameter to the list of parameters
 	 * stored by owner.
@@ -48,12 +51,7 @@ extends SimpleParameter<String> {
 		super(owner, name);
 	}
 
-	/**
-	 * Set the default value and add to the list of choices.
-	 *
-	 * @param defaultValue the default value.
-	 * @return this
-	 */
+	@Override
 	public ChoiceParameter setDefaultValue(String defaultValue) {
 		super.setDefaultValue(defaultValue);
 		choices.add(defaultValue);
@@ -68,6 +66,18 @@ extends SimpleParameter<String> {
 	 */
 	public ChoiceParameter addChoices(String... choices) {
 		Collections.addAll(this.choices, choices);
+		return this;
+	}
+
+	/**
+	 * Add additional hidden choices. This function can be called multiple
+	 * times. These choices will not be printed in the usage string.
+	 *
+	 * @param hiddenChoices additional hidden choices
+	 * @return this
+	 */
+	public ChoiceParameter addHiddenChoices(String... hiddenChoices) {
+		Collections.addAll(this.hiddenChoices, hiddenChoices);
 		return this;
 	}
 
@@ -107,7 +117,19 @@ extends SimpleParameter<String> {
 			}
 		}
 
+		for (String choice : hiddenChoices) {
+			if (choice.equals(selected)) {
+				this.value = selected;
+				return;
+			}
+		}
+
 		throw new ProgramParametrizationException(
 			"Selection '" + selected + "' for option '" + name + "' is not in choices '[" + StringUtils.join(choices, ", ") + "]'");
+	}
+
+	@Override
+	public String toString() {
+		return this.value;
 	}
 }

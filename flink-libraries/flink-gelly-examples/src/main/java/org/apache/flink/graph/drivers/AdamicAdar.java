@@ -18,31 +18,30 @@
 
 package org.apache.flink.graph.drivers;
 
-import org.apache.commons.lang3.text.StrBuilder;
-import org.apache.commons.lang3.text.WordUtils;
+import org.apache.flink.api.java.DataSet;
 import org.apache.flink.graph.Graph;
-import org.apache.flink.graph.drivers.output.CSV;
-import org.apache.flink.graph.drivers.output.Print;
-import org.apache.flink.graph.drivers.parameter.LongParameter;
-import org.apache.flink.graph.library.similarity.AdamicAdar.Result;
+import org.apache.flink.graph.drivers.parameter.BooleanParameter;
+import org.apache.flink.graph.drivers.parameter.DoubleParameter;
 import org.apache.flink.types.CopyableValue;
 
-import static org.apache.flink.api.common.ExecutionConfig.PARALLELISM_DEFAULT;
+import org.apache.commons.lang3.text.StrBuilder;
+import org.apache.commons.lang3.text.WordUtils;
 
 /**
  * Driver for {@link org.apache.flink.graph.library.similarity.AdamicAdar}.
  */
 public class AdamicAdar<K extends CopyableValue<K>, VV, EV>
-extends SimpleDriver<Result<K>>
-implements Driver<K, VV, EV>, CSV, Print {
+extends DriverBase<K, VV, EV> {
 
-	private LongParameter littleParallelism = new LongParameter(this, "little_parallelism")
-		.setDefaultValue(PARALLELISM_DEFAULT);
+	private DoubleParameter minRatio = new DoubleParameter(this, "minimum_ratio")
+		.setDefaultValue(0.0)
+		.setMinimumValue(0.0, true);
 
-	@Override
-	public String getName() {
-		return this.getClass().getSimpleName();
-	}
+	private DoubleParameter minScore = new DoubleParameter(this, "minimum_score")
+		.setDefaultValue(0.0)
+		.setMinimumValue(0.0, true);
+
+	private BooleanParameter mirrorResults = new BooleanParameter(this, "mirror_results");
 
 	@Override
 	public String getShortDescription() {
@@ -61,11 +60,12 @@ implements Driver<K, VV, EV>, CSV, Print {
 	}
 
 	@Override
-	public void plan(Graph<K, VV, EV> graph) throws Exception {
-		int lp = littleParallelism.getValue().intValue();
-
-		result = graph
+	public DataSet plan(Graph<K, VV, EV> graph) throws Exception {
+		return graph
 			.run(new org.apache.flink.graph.library.similarity.AdamicAdar<K, VV, EV>()
-				.setLittleParallelism(lp));
+				.setMinimumRatio(minRatio.getValue().floatValue())
+				.setMinimumScore(minScore.getValue().floatValue())
+				.setMirrorResults(mirrorResults.getValue())
+				.setParallelism(parallelism.getValue().intValue()));
 	}
 }

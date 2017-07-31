@@ -21,7 +21,7 @@ package org.apache.flink.runtime.resourcemanager;
 import org.apache.flink.api.common.time.Time;
 import org.apache.flink.configuration.AkkaOptions;
 import org.apache.flink.configuration.Configuration;
-import org.apache.flink.runtime.resourcemanager.exceptions.ConfigurationException;
+import org.apache.flink.util.ConfigurationException;
 import org.apache.flink.util.Preconditions;
 import scala.concurrent.duration.Duration;
 
@@ -53,24 +53,24 @@ public class ResourceManagerConfiguration {
 	// --------------------------------------------------------------------------
 
 	public static ResourceManagerConfiguration fromConfiguration(Configuration configuration) throws ConfigurationException {
-		final String strTimeout = configuration.getString(AkkaOptions.AKKA_ASK_TIMEOUT);
+		final String strTimeout = configuration.getString(AkkaOptions.ASK_TIMEOUT);
 		final Time timeout;
 
 		try {
 			timeout = Time.milliseconds(Duration.apply(strTimeout).toMillis());
 		} catch (NumberFormatException e) {
 			throw new ConfigurationException("Could not parse the resource manager's timeout " +
-				"value " + AkkaOptions.AKKA_ASK_TIMEOUT + '.', e);
+				"value " + AkkaOptions.ASK_TIMEOUT + '.', e);
 		}
 
-		final String strHeartbeatInterval = configuration.getString(AkkaOptions.AKKA_WATCH_HEARTBEAT_INTERVAL);
+		final String strHeartbeatInterval = configuration.getString(AkkaOptions.WATCH_HEARTBEAT_INTERVAL);
 		final Time heartbeatInterval;
 
 		try {
 			heartbeatInterval = Time.milliseconds(Duration.apply(strHeartbeatInterval).toMillis());
 		} catch (NumberFormatException e) {
 			throw new ConfigurationException("Could not parse the resource manager's heartbeat interval " +
-				"value " + AkkaOptions.AKKA_WATCH_HEARTBEAT_INTERVAL + '.', e);
+				"value " + AkkaOptions.WATCH_HEARTBEAT_INTERVAL + '.', e);
 		}
 
 		return new ResourceManagerConfiguration(timeout, heartbeatInterval);

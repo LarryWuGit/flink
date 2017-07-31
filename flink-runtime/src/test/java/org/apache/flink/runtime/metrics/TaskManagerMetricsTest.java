@@ -15,37 +15,41 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package org.apache.flink.runtime.metrics;
 
-import akka.actor.ActorRef;
-import akka.actor.ActorSystem;
-import akka.actor.Props;
-import akka.testkit.JavaTestKit;
+package org.apache.flink.runtime.metrics;
 
 import org.apache.flink.configuration.Configuration;
 import org.apache.flink.runtime.akka.AkkaUtils;
 import org.apache.flink.runtime.clusterframework.types.ResourceID;
 import org.apache.flink.runtime.highavailability.HighAvailabilityServices;
+import org.apache.flink.runtime.highavailability.nonha.embedded.EmbeddedHaServices;
 import org.apache.flink.runtime.jobmanager.JobManager;
 import org.apache.flink.runtime.jobmanager.MemoryArchivist;
-import org.apache.flink.runtime.leaderretrieval.LeaderRetrievalService;
-import org.apache.flink.runtime.leaderretrieval.StandaloneLeaderRetrievalService;
 import org.apache.flink.runtime.messages.TaskManagerMessages;
 import org.apache.flink.runtime.taskexecutor.TaskManagerConfiguration;
 import org.apache.flink.runtime.taskexecutor.TaskManagerServices;
 import org.apache.flink.runtime.taskexecutor.TaskManagerServicesConfiguration;
 import org.apache.flink.runtime.taskmanager.TaskManager;
-
 import org.apache.flink.runtime.testingUtils.TestingUtils;
+import org.apache.flink.util.TestLogger;
+
+import akka.actor.ActorRef;
+import akka.actor.ActorSystem;
+import akka.actor.Props;
+import akka.testkit.JavaTestKit;
 import org.junit.Assert;
 import org.junit.Test;
 
-import scala.concurrent.duration.FiniteDuration;
-
 import java.net.InetAddress;
+import java.util.UUID;
 import java.util.concurrent.TimeUnit;
 
-public class TaskManagerMetricsTest {
+import scala.concurrent.duration.FiniteDuration;
+
+/**
+ * Tests for the behavior of the metric system on a task manager.
+ */
+public class TaskManagerMetricsTest extends TestLogger {
 
 	/**
 	 * Tests the metric registry life cycle on JobManager re-connects.
@@ -53,6 +57,9 @@ public class TaskManagerMetricsTest {
 	@Test
 	public void testMetricRegistryLifeCycle() throws Exception {
 		ActorSystem actorSystem = null;
+
+		HighAvailabilityServices highAvailabilityServices = new EmbeddedHaServices(TestingUtils.defaultExecutor());
+
 		try {
 			actorSystem = AkkaUtils.createLocalActorSystem(new Configuration());
 
@@ -64,10 +71,9 @@ public class TaskManagerMetricsTest {
 				actorSystem,
 				TestingUtils.defaultExecutor(),
 				TestingUtils.defaultExecutor(),
+				highAvailabilityServices,
 				JobManager.class,
 				MemoryArchivist.class)._1();
-
-			LeaderRetrievalService leaderRetrievalService = new StandaloneLeaderRetrievalService(jobManager.path().toString());
 
 			// ================================================================
 			// Start TaskManager
@@ -75,7 +81,7 @@ public class TaskManagerMetricsTest {
 			final Configuration config = new Configuration();
 			final ResourceID tmResourceID = ResourceID.generate();
 
-			TaskManagerServicesConfiguration taskManagerServicesConfiguration = 
+			TaskManagerServicesConfiguration taskManagerServicesConfiguration =
 					TaskManagerServicesConfiguration.fromConfiguration(config, InetAddress.getLocalHost(), false);
 
 			TaskManagerConfiguration taskManagerConfiguration = TaskManagerConfiguration.fromConfiguration(config);
@@ -84,7 +90,7 @@ public class TaskManagerMetricsTest {
 					taskManagerServicesConfiguration, tmResourceID);
 
 			final MetricRegistry tmRegistry = taskManagerServices.getMetricRegistry();
-			
+
 			// create the task manager
 			final Props tmProps = TaskManager.getTaskManagerProps(
 				TaskManager.class,
@@ -94,7 +100,7 @@ public class TaskManagerMetricsTest {
 				taskManagerServices.getMemoryManager(),
 				taskManagerServices.getIOManager(),
 				taskManagerServices.getNetworkEnvironment(),
-				leaderRetrievalService,
+				highAvailabilityServices,
 				tmRegistry);
 
 			final ActorRef taskManager = actorSystem.actorOf(tmProps);
@@ -107,20 +113,21 @@ public class TaskManagerMetricsTest {
 							getTestActor());
 
 						// wait for the TM to be registered
-						expectMsgEquals(TaskManagerMessages.getRegisteredAtJobManagerMessage());
+						TaskManagerMessages.RegisteredAtJobManager registeredAtJobManager = expectMsgClass(TaskManagerMessages.RegisteredAtJobManager.class);
+						UUID leaderId = registeredAtJobManager.leaderId();
 
 						// trigger re-registration of TM; this should include a disconnect from the current JM
 						taskManager.tell(
 							new TaskManagerMessages.JobManagerLeaderAddress(
 								jobManager.path().toString(),
-								HighAvailabilityServices.DEFAULT_LEADER_ID),
+								leaderId),
 							jobManager);
 
 						// wait for re-registration to be completed
 						taskManager.tell(TaskManagerMessages.getNotifyWhenRegisteredAtJobManagerMessage(),
 							getTestActor());
 
-						expectMsgEquals(TaskManagerMessages.getRegisteredAtJobManagerMessage());
+						expectMsgClass(TaskManagerMessages.RegisteredAtJobManager.class);
 					}
 				};
 			}};
@@ -134,6 +141,10 @@ public class TaskManagerMetricsTest {
 		} finally {
 			if (actorSystem != null) {
 				actorSystem.shutdown();
+			}
+
+			if (highAvailabilityServices != null) {
+				highAvailabilityServices.closeAndCleanupAllData();
 			}
 		}
 	}

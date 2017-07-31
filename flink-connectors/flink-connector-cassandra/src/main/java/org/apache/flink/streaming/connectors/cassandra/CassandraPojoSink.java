@@ -17,13 +17,15 @@
 
 package org.apache.flink.streaming.connectors.cassandra;
 
+import org.apache.flink.configuration.Configuration;
+
+import com.datastax.driver.core.ResultSet;
 import com.datastax.driver.mapping.Mapper;
 import com.datastax.driver.mapping.MappingManager;
 import com.google.common.util.concurrent.ListenableFuture;
-import org.apache.flink.configuration.Configuration;
 
 /**
- * Flink Sink to save data into a Cassandra cluster using 
+ * Flink Sink to save data into a Cassandra cluster using
  * <a href="http://docs.datastax.com/en/drivers/java/2.1/com/datastax/driver/mapping/Mapper.html">Mapper</a>,
  * which it uses annotations from
  * <a href="http://docs.datastax.com/en/drivers/java/2.1/com/datastax/driver/mapping/annotations/package-summary.html">
@@ -31,7 +33,7 @@ import org.apache.flink.configuration.Configuration;
  *
  * @param <IN> Type of the elements emitted by this sink
  */
-public class CassandraPojoSink<IN> extends CassandraSinkBase<IN, Void> {
+public class CassandraPojoSink<IN> extends CassandraSinkBase<IN, ResultSet> {
 
 	private static final long serialVersionUID = 1L;
 
@@ -40,9 +42,9 @@ public class CassandraPojoSink<IN> extends CassandraSinkBase<IN, Void> {
 	protected transient MappingManager mappingManager;
 
 	/**
-	 * The main constructor for creating CassandraPojoSink
+	 * The main constructor for creating CassandraPojoSink.
 	 *
-	 * @param clazz Class<IN> instance
+	 * @param clazz Class instance
 	 */
 	public CassandraPojoSink(Class<IN> clazz, ClusterBuilder builder) {
 		super(builder);
@@ -61,7 +63,7 @@ public class CassandraPojoSink<IN> extends CassandraSinkBase<IN, Void> {
 	}
 
 	@Override
-	public ListenableFuture<Void> send(IN value) {
-		return mapper.saveAsync(value);
+	public ListenableFuture<ResultSet> send(IN value) {
+		return session.executeAsync(mapper.saveQuery(value));
 	}
 }

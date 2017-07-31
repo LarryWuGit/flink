@@ -22,27 +22,31 @@ import org.apache.flink.streaming.api.functions.AssignerWithPunctuatedWatermarks
 import org.apache.flink.streaming.api.operators.StreamingRuntimeContext;
 import org.apache.flink.streaming.connectors.kafka.config.OffsetCommitMode;
 import org.apache.flink.streaming.connectors.kafka.internal.Kafka010Fetcher;
+import org.apache.flink.streaming.connectors.kafka.internal.Kafka010PartitionDiscoverer;
 import org.apache.flink.streaming.connectors.kafka.internals.AbstractFetcher;
+import org.apache.flink.streaming.connectors.kafka.internals.AbstractPartitionDiscoverer;
 import org.apache.flink.streaming.connectors.kafka.internals.KafkaTopicPartition;
+import org.apache.flink.streaming.connectors.kafka.internals.KafkaTopicsDescriptor;
 import org.apache.flink.streaming.util.serialization.DeserializationSchema;
 import org.apache.flink.streaming.util.serialization.KeyedDeserializationSchema;
 import org.apache.flink.streaming.util.serialization.KeyedDeserializationSchemaWrapper;
 import org.apache.flink.util.PropertiesUtil;
 import org.apache.flink.util.SerializedValue;
 
-import java.util.Collections;
-import java.util.Map;
-import java.util.List;
-import java.util.Properties;
+import org.apache.kafka.clients.consumer.ConsumerConfig;
 
+import java.util.Collections;
+import java.util.List;
+import java.util.Map;
+import java.util.Properties;
 
 /**
  * The Flink Kafka Consumer is a streaming data source that pulls a parallel data stream from
  * Apache Kafka 0.10.x. The consumer can run in multiple parallel instances, each of which will pull
- * data from one or more Kafka partitions. 
- * 
+ * data from one or more Kafka partitions.
+ *
  * <p>The Flink Kafka Consumer participates in checkpointing and guarantees that no data is lost
- * during a failure, and that the computation processes elements "exactly once". 
+ * during a failure, and that the computation processes elements "exactly once".
  * (Note: These guarantees naturally assume that Kafka itself does not loose any data.)</p>
  *
  * <p>Please note that Flink snapshots the offsets internally as part of its distributed checkpoints. The offsets
@@ -52,20 +56,15 @@ import java.util.Properties;
  *
  * <p>Please refer to Kafka's documentation for the available configuration properties:
  * http://kafka.apache.org/documentation.html#newconsumerconfigs</p>
- *
- * <p><b>NOTE:</b> The implementation currently accesses partition metadata when the consumer
- * is constructed. That means that the client that submits the program needs to be able to
- * reach the Kafka brokers or ZooKeeper.</p>
  */
 public class FlinkKafkaConsumer010<T> extends FlinkKafkaConsumer09<T> {
 
 	private static final long serialVersionUID = 2324564345203409112L;
 
-
 	// ------------------------------------------------------------------------
 
 	/**
-	 * Creates a new Kafka streaming source consumer for Kafka 0.10.x
+	 * Creates a new Kafka streaming source consumer for Kafka 0.10.x.
 	 *
 	 * @param topic
 	 *           The name of the topic that should be consumed.
@@ -81,7 +80,7 @@ public class FlinkKafkaConsumer010<T> extends FlinkKafkaConsumer09<T> {
 	/**
 	 * Creates a new Kafka streaming source consumer for Kafka 0.10.x
 	 *
-	 * This constructor allows passing a {@see KeyedDeserializationSchema} for reading key/value
+	 * <p>This constructor allows passing a {@see KeyedDeserializationSchema} for reading key/value
 	 * pairs, offsets, and topic names from Kafka.
 	 *
 	 * @param topic
@@ -98,7 +97,7 @@ public class FlinkKafkaConsumer010<T> extends FlinkKafkaConsumer09<T> {
 	/**
 	 * Creates a new Kafka streaming source consumer for Kafka 0.10.x
 	 *
-	 * This constructor allows passing multiple topics to the consumer.
+	 * <p>This constructor allows passing multiple topics to the consumer.
 	 *
 	 * @param topics
 	 *           The Kafka topics to read from.
@@ -114,7 +113,7 @@ public class FlinkKafkaConsumer010<T> extends FlinkKafkaConsumer09<T> {
 	/**
 	 * Creates a new Kafka streaming source consumer for Kafka 0.10.x
 	 *
-	 * This constructor allows passing multiple topics and a key/value deserialization schema.
+	 * <p>This constructor allows passing multiple topics and a key/value deserialization schema.
 	 *
 	 * @param topics
 	 *           The Kafka topics to read from.
@@ -138,6 +137,12 @@ public class FlinkKafkaConsumer010<T> extends FlinkKafkaConsumer09<T> {
 
 		boolean useMetrics = !PropertiesUtil.getBoolean(properties, KEY_DISABLE_METRICS, false);
 
+		// make sure that auto commit is disabled when our offset commit mode is ON_CHECKPOINTS;
+		// this overwrites whatever setting the user configured in the properties
+		if (offsetCommitMode == OffsetCommitMode.ON_CHECKPOINTS || offsetCommitMode == OffsetCommitMode.DISABLED) {
+			properties.setProperty(ConsumerConfig.ENABLE_AUTO_COMMIT_CONFIG, "false");
+		}
+
 		return new Kafka010Fetcher<>(
 				sourceContext,
 				assignedPartitionsWithInitialOffsets,
@@ -152,5 +157,14 @@ public class FlinkKafkaConsumer010<T> extends FlinkKafkaConsumer09<T> {
 				properties,
 				pollTimeout,
 				useMetrics);
+	}
+
+	@Override
+	protected AbstractPartitionDiscoverer createPartitionDiscoverer(
+			KafkaTopicsDescriptor topicsDescriptor,
+			int indexOfThisSubtask,
+			int numParallelSubtasks) {
+
+		return new Kafka010PartitionDiscoverer(topicsDescriptor, indexOfThisSubtask, numParallelSubtasks, properties);
 	}
 }

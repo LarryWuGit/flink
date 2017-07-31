@@ -19,7 +19,7 @@
 package org.apache.flink.streaming.api.functions.windowing;
 
 import org.apache.flink.annotation.PublicEvolving;
-import org.apache.flink.api.common.functions.Function;
+import org.apache.flink.api.common.functions.AbstractRichFunction;
 import org.apache.flink.api.common.state.KeyedStateStore;
 import org.apache.flink.streaming.api.windowing.windows.Window;
 import org.apache.flink.util.Collector;
@@ -34,7 +34,7 @@ import org.apache.flink.util.Collector;
  * @param <W> The type of {@code Window} that this window function can be applied on.
  */
 @PublicEvolving
-public abstract class ProcessWindowFunction<IN, OUT, KEY, W extends Window> implements Function {
+public abstract class ProcessWindowFunction<IN, OUT, KEY, W extends Window> extends AbstractRichFunction {
 
 	private static final long serialVersionUID = 1L;
 
@@ -59,13 +59,19 @@ public abstract class ProcessWindowFunction<IN, OUT, KEY, W extends Window> impl
 	public void clear(Context context) throws Exception {}
 
 	/**
-	 * The context holding window metadata
+	 * The context holding window metadata.
 	 */
 	public abstract class Context implements java.io.Serializable {
 		/**
-		 * @return The window that is being evaluated.
+		 * Returns the window that is being evaluated.
 		 */
 		public abstract W window();
+
+		/** Returns the current processing time. */
+		public abstract long currentProcessingTime();
+
+		/** Returns the current event-time watermark. */
+		public abstract long currentWatermark();
 
 		/**
 		 * State accessor for per-key and per-window state.
