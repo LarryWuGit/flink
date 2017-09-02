@@ -298,6 +298,8 @@ object WindowJoinUtil {
           timePred.leftInputOnLeftSide
         case (SqlKind.LESS_THAN | SqlKind.LESS_THAN_OR_EQUAL) =>
           !timePred.leftInputOnLeftSide
+        case _ =>
+          return None
       }
 
     // reduce predicate to constants to compute bounds
@@ -416,8 +418,8 @@ object WindowJoinUtil {
       Some(rightType))
 
     val conversion = generator.generateConverterResultExpression(
-      returnType.physicalTypeInfo,
-      returnType.physicalType.getFieldNames.asScala)
+      returnType.typeInfo,
+      returnType.fieldNames)
 
     // if other condition is none, then output the result directly
     val body = otherCondition match {
@@ -427,9 +429,8 @@ object WindowJoinUtil {
            |${generator.collectorTerm}.collect(${conversion.resultTerm});
            |""".stripMargin
       case Some(remainCondition) =>
-        // map logical field accesses to physical accesses
-        val physicalCondition = returnType.mapRexNode(remainCondition)
-        val genCond = generator.generateExpression(physicalCondition)
+        // generate code for remaining condition
+        val genCond = generator.generateExpression(remainCondition)
         s"""
            |${genCond.code}
            |if (${genCond.resultTerm}) {
@@ -443,7 +444,7 @@ object WindowJoinUtil {
       ruleDescription,
       classOf[FlatJoinFunction[Row, Row, Row]],
       body,
-      returnType.physicalTypeInfo)
+      returnType.typeInfo)
   }
 
 }

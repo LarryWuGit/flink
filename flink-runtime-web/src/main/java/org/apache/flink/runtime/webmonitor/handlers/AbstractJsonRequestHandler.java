@@ -18,14 +18,14 @@
 
 package org.apache.flink.runtime.webmonitor.handlers;
 
-import org.apache.flink.runtime.instance.ActorGateway;
+import org.apache.flink.runtime.jobmaster.JobManagerGateway;
 
-import io.netty.buffer.Unpooled;
-import io.netty.handler.codec.http.DefaultFullHttpResponse;
-import io.netty.handler.codec.http.FullHttpResponse;
-import io.netty.handler.codec.http.HttpHeaders;
-import io.netty.handler.codec.http.HttpResponseStatus;
-import io.netty.handler.codec.http.HttpVersion;
+import org.apache.flink.shaded.netty4.io.netty.buffer.Unpooled;
+import org.apache.flink.shaded.netty4.io.netty.handler.codec.http.DefaultFullHttpResponse;
+import org.apache.flink.shaded.netty4.io.netty.handler.codec.http.FullHttpResponse;
+import org.apache.flink.shaded.netty4.io.netty.handler.codec.http.HttpHeaders;
+import org.apache.flink.shaded.netty4.io.netty.handler.codec.http.HttpResponseStatus;
+import org.apache.flink.shaded.netty4.io.netty.handler.codec.http.HttpVersion;
 
 import java.nio.charset.Charset;
 import java.util.Map;
@@ -38,8 +38,8 @@ public abstract class AbstractJsonRequestHandler implements RequestHandler {
 	private static final Charset ENCODING = Charset.forName("UTF-8");
 
 	@Override
-	public FullHttpResponse handleRequest(Map<String, String> pathParams, Map<String, String> queryParams, ActorGateway jobManager) throws Exception {
-		String result = handleJsonRequest(pathParams, queryParams, jobManager);
+	public FullHttpResponse handleRequest(Map<String, String> pathParams, Map<String, String> queryParams, JobManagerGateway jobManagerGateway) throws Exception {
+		String result = handleJsonRequest(pathParams, queryParams, jobManagerGateway);
 		byte[] bytes = result.getBytes(ENCODING);
 
 		DefaultFullHttpResponse response = new DefaultFullHttpResponse(
@@ -57,7 +57,7 @@ public abstract class AbstractJsonRequestHandler implements RequestHandler {
 	 *
 	 * @param pathParams The map of REST path parameters, decoded by the router.
 	 * @param queryParams The map of query parameters.
-	 * @param jobManager The JobManager actor.
+	 * @param jobManagerGateway to communicate with the JobManager.
 	 *
 	 * @return The JSON string that is the HTTP response.
 	 *
@@ -69,6 +69,6 @@ public abstract class AbstractJsonRequestHandler implements RequestHandler {
 	public abstract String handleJsonRequest(
 			Map<String, String> pathParams,
 			Map<String, String> queryParams,
-			ActorGateway jobManager) throws Exception;
+			JobManagerGateway jobManagerGateway) throws Exception;
 
 }

@@ -18,21 +18,24 @@
 
 package org.apache.flink.runtime.blob;
 
+import org.apache.flink.api.common.JobID;
+import org.apache.flink.util.OperatingSystem;
+import org.apache.flink.util.TestLogger;
+
+import org.junit.After;
+import org.junit.Before;
+import org.junit.Rule;
+import org.junit.Test;
+import org.junit.rules.TemporaryFolder;
+
+import java.io.File;
+import java.io.IOException;
+
 import static org.junit.Assert.assertTrue;
 import static org.junit.Assume.assumeTrue;
 import static org.mockito.Mockito.mock;
 
-import org.apache.flink.util.OperatingSystem;
-import org.junit.After;
-import org.junit.Before;
-import org.junit.Test;
-import org.junit.Rule;
-
-import java.io.File;
-import java.io.IOException;
-import org.junit.rules.TemporaryFolder;
-
-public class BlobUtilsTest {
+public class BlobUtilsTest extends TestLogger {
 
 	private final static String CANNOT_CREATE_THIS = "cannot-create-this";
 
@@ -54,7 +57,7 @@ public class BlobUtilsTest {
 
 	@After
 	public void after() {
-		// Cleanup test directory
+		// Cleanup test directory, ensure it was empty
 		assertTrue(blobUtilsTestDirectory.delete());
 	}
 
@@ -62,12 +65,18 @@ public class BlobUtilsTest {
 	public void testExceptionOnCreateStorageDirectoryFailure() throws
 		IOException {
 		// Should throw an Exception
-		BlobUtils.initStorageDirectory(new File(blobUtilsTestDirectory, CANNOT_CREATE_THIS).getAbsolutePath());
+		BlobUtils.initLocalStorageDirectory(new File(blobUtilsTestDirectory, CANNOT_CREATE_THIS).getAbsolutePath());
 	}
 
 	@Test(expected = Exception.class)
-	public void testExceptionOnCreateCacheDirectoryFailure() {
+	public void testExceptionOnCreateCacheDirectoryFailureNoJob() {
 		// Should throw an Exception
-		BlobUtils.getStorageLocation(new File(blobUtilsTestDirectory, CANNOT_CREATE_THIS), mock(BlobKey.class));
+		BlobUtils.getStorageLocation(new File(blobUtilsTestDirectory, CANNOT_CREATE_THIS), null, mock(BlobKey.class));
+	}
+
+	@Test(expected = Exception.class)
+	public void testExceptionOnCreateCacheDirectoryFailureForJob() {
+		// Should throw an Exception
+		BlobUtils.getStorageLocation(new File(blobUtilsTestDirectory, CANNOT_CREATE_THIS), new JobID(), mock(BlobKey.class));
 	}
 }

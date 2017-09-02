@@ -38,14 +38,9 @@ import org.apache.flink.runtime.checkpoint.CheckpointStatsSnapshot;
 import org.apache.flink.runtime.checkpoint.CheckpointStatsTracker;
 import org.apache.flink.runtime.checkpoint.CompletedCheckpointStore;
 import org.apache.flink.runtime.checkpoint.MasterTriggerRestoreHook;
-import org.apache.flink.runtime.concurrent.AcceptFunction;
-import org.apache.flink.runtime.concurrent.BiFunction;
-import org.apache.flink.runtime.concurrent.CompletableFuture;
-import org.apache.flink.runtime.concurrent.Future;
 import org.apache.flink.runtime.concurrent.FutureUtils;
 import org.apache.flink.runtime.concurrent.FutureUtils.ConjunctFuture;
 import org.apache.flink.runtime.concurrent.ScheduledExecutorServiceAdapter;
-import org.apache.flink.runtime.concurrent.impl.FlinkCompletableFuture;
 import org.apache.flink.runtime.execution.ExecutionState;
 import org.apache.flink.runtime.execution.SuppressRestartsException;
 import org.apache.flink.runtime.executiongraph.failover.FailoverStrategy;
@@ -66,16 +61,17 @@ import org.apache.flink.runtime.jobgraph.tasks.JobCheckpointingSettings;
 import org.apache.flink.runtime.jobmanager.scheduler.CoLocationGroup;
 import org.apache.flink.runtime.jobmanager.scheduler.NoResourceAvailableException;
 import org.apache.flink.runtime.query.KvStateLocationRegistry;
+import org.apache.flink.runtime.state.SharedStateRegistry;
 import org.apache.flink.runtime.state.StateBackend;
 import org.apache.flink.runtime.taskmanager.TaskExecutionState;
-import org.apache.flink.runtime.util.SerializedThrowable;
+import org.apache.flink.util.SerializedThrowable;
 import org.apache.flink.util.ExceptionUtils;
 import org.apache.flink.util.FlinkException;
 import org.apache.flink.util.FlinkRuntimeException;
 import org.apache.flink.util.Preconditions;
 import org.apache.flink.util.SerializedValue;
-
 import org.apache.flink.util.StringUtils;
+
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -91,6 +87,8 @@ import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.NoSuchElementException;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.ExecutionException;
@@ -459,7 +457,8 @@ public class ExecutionGraph implements AccessExecutionGraph, Archiveable<Archive
 			checkpointIDCounter,
 			checkpointStore,
 			checkpointDir,
-			ioExecutor);
+			ioExecutor,
+			SharedStateRegistry.DEFAULT_FACTORY);
 
 		// register the master hooks on the checkpoint coordinator
 		for (MasterTriggerRestoreHook<?> hook : masterHooks) {
@@ -793,7 +792,7 @@ public class ExecutionGraph implements AccessExecutionGraph, Archiveable<Archive
 			newExecJobVertices.add(ejv);
 		}
 
-		terminationFuture = new FlinkCompletableFuture<>();
+		terminationFuture = new CompletableFuture<>();
 		failoverStrategy.notifyNewVertices(newExecJobVertices);
 	}
 
@@ -852,7 +851,7 @@ public class ExecutionGraph implements AccessExecutionGraph, Archiveable<Archive
 
 		try {
 			// collecting all the slots may resize and fail in that operation without slots getting lost
-			final ArrayList<Future<SimpleSlot>> slotFutures = new ArrayList<>(getNumberOfExecutionJobVertices());
+			final ArrayList<CompletableFuture<SimpleSlot>> slotFutures = new ArrayList<>(getNumberOfExecutionJobVertices());
 
 			// allocate the slots (obtain all their futures
 			for (ExecutionJobVertex ejv : getVerticesTopologically()) {
@@ -887,10 +886,8 @@ public class ExecutionGraph implements AccessExecutionGraph, Archiveable<Archive
 			}, timeout.getSize(), timeout.getUnit());
 
 
-			allAllocationsComplete.handleAsync(new BiFunction<Void, Throwable, Void>() {
-
-				@Override
-				public Void apply(Void slots, Throwable throwable) {
+			allAllocationsComplete.handleAsync(
+				(Void slots, Throwable throwable) -> {
 					try {
 						// we do not need the cancellation timeout any more
 						timeoutCancelHandle.cancel(false);
@@ -907,9 +904,9 @@ public class ExecutionGraph implements AccessExecutionGraph, Archiveable<Archive
 										slot = execAndSlot.slotFuture.getNow(null);
 										checkNotNull(slot);
 									}
-									catch (ExecutionException | NullPointerException e) {
+									catch (CompletionException | NullPointerException e) {
 										throw new IllegalStateException("SlotFuture is incomplete " +
-												"or erroneous even though all futures completed");
+												"or erroneous even though all futures completed", e);
 									}
 
 									// actual deployment
@@ -938,8 +935,8 @@ public class ExecutionGraph implements AccessExecutionGraph, Archiveable<Archive
 					// Wouldn't it be nice if we could return an actual Void object?
 					// return (Void) Unsafe.getUnsafe().allocateInstance(Void.class);
 					return null; 
-				}
-			}, futureExecutor);
+				},
+				futureExecutor);
 
 			// from now on, slots will be rescued by the the futures and their completion, or by the timeout
 			successful = true;
@@ -964,7 +961,7 @@ public class ExecutionGraph implements AccessExecutionGraph, Archiveable<Archive
 					// make sure no concurrent local actions interfere with the cancellation
 					final long globalVersionForRestart = incrementGlobalModVersion();
 
-					final ArrayList<Future<?>> futures = new ArrayList<>(verticesInCreationOrder.size());
+					final ArrayList<CompletableFuture<?>> futures = new ArrayList<>(verticesInCreationOrder.size());
 
 					// cancel all tasks (that still need cancelling)
 					for (ExecutionJobVertex ejv : verticesInCreationOrder) {
@@ -973,14 +970,13 @@ public class ExecutionGraph implements AccessExecutionGraph, Archiveable<Archive
 
 					// we build a future that is complete once all vertices have reached a terminal state
 					final ConjunctFuture<Void> allTerminal = FutureUtils.waitForAll(futures);
-					allTerminal.thenAccept(new AcceptFunction<Void>() {
-						@Override
-						public void accept(Void value) {
+					allTerminal.thenAccept(
+						(Void value) -> {
 							// cancellations may currently be overridden by failures which trigger
 							// restarts, so we need to pass a proper restart global version here
 							allVerticesInTerminalState(globalVersionForRestart);
 						}
-					});
+					);
 
 					return;
 				}
@@ -1126,7 +1122,7 @@ public class ExecutionGraph implements AccessExecutionGraph, Archiveable<Archive
 				final long globalVersionForRestart = incrementGlobalModVersion();
 
 				// we build a future that is complete once all vertices have reached a terminal state
-				final ArrayList<Future<?>> futures = new ArrayList<>(verticesInCreationOrder.size());
+				final ArrayList<CompletableFuture<?>> futures = new ArrayList<>(verticesInCreationOrder.size());
 
 				// cancel all tasks (that still need cancelling)
 				for (ExecutionJobVertex ejv : verticesInCreationOrder) {
@@ -1134,12 +1130,7 @@ public class ExecutionGraph implements AccessExecutionGraph, Archiveable<Archive
 				}
 
 				final ConjunctFuture<Void> allTerminal = FutureUtils.waitForAll(futures);
-				allTerminal.thenAccept(new AcceptFunction<Void>() {
-					@Override
-					public void accept(Void value) {
-						allVerticesInTerminalState(globalVersionForRestart);
-					}
-				});
+				allTerminal.thenAccept((Void value) -> allVerticesInTerminalState(globalVersionForRestart));
 
 				return;
 			}
@@ -1250,7 +1241,7 @@ public class ExecutionGraph implements AccessExecutionGraph, Archiveable<Archive
 	}
 
 	@VisibleForTesting
-	public Future<JobStatus> getTerminationFuture() {
+	public CompletableFuture<JobStatus> getTerminationFuture() {
 		return terminationFuture;
 	}
 
